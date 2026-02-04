@@ -78,7 +78,9 @@ send_event "history_end" "{\"message\": \"Log history complete\"}"
 # Cleanup function
 cleanup() {
     # Kill all background processes
-    jobs -p | xargs -r kill 2>/dev/null
+    for pid in $(jobs -p 2>/dev/null); do
+        kill "$pid" 2>/dev/null
+    done
     exit 0
 }
 
@@ -105,7 +107,8 @@ mkfifo "$LOG_FIFO" 2>/dev/null || true
     fi
 
     # Stream system logs (filtered for l2bridge-related entries)
-    logread -f 2>/dev/null | grep --line-buffered -iE "l2bridge|tinc|kcptun" | while IFS= read -r line; do
+    # Note: BusyBox grep doesn't support --line-buffered, but while read handles it
+    logread -f 2>/dev/null | grep -iE "l2bridge|tinc|kcptun" | while IFS= read -r line; do
         echo "system|$line"
     done &
 

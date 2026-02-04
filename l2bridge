@@ -1017,7 +1017,7 @@ AIRCRAFT_JSON
     echo "  http://$(get_tailscale_ip_nowait 2>/dev/null || echo '<router-ip>'):$WEBUI_PORT"
     echo ""
     echo "  Or from LAN:"
-    local lan_ip=$(ip -4 addr show br-lan 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+    local lan_ip=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet / {print $2}' | cut -d'/' -f1 | head -1)
     [ -n "$lan_ip" ] && echo "  http://$lan_ip:$WEBUI_PORT"
     echo ""
 }
