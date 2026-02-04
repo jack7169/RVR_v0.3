@@ -1002,6 +1002,16 @@ cmd_webui_install() {
         fi
     fi
 
+    # Ensure watchdog is installed for health monitoring
+    if ! crontab -l 2>/dev/null | grep -q "l2bridge-watchdog"; then
+        log_info "Installing watchdog for health monitoring..."
+        cmd_watchdog_install
+    fi
+
+    # Run initial health check to populate health file
+    log_info "Running initial health check..."
+    do_health_check "$(get_aircraft_ip)" >/dev/null 2>&1 || true
+
     echo ""
     echo "========================================="
     echo "  L2Bridge Web UI Installed"
