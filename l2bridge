@@ -83,6 +83,9 @@ Commands:
   watchdog-install        Install cron-based watchdog for auto-recovery
   watchdog-remove         Remove watchdog cron job
 
+  webui-install           Install web-based control panel on port 8081
+  webui-remove            Remove web UI
+
 EOF
 }
 
@@ -925,6 +928,132 @@ cmd_uninstall() {
 }
 
 #############################################
+# WEB UI INSTALL/REMOVE
+#############################################
+WEBUI_ROOT="/www/l2bridge"
+WEBUI_CONFIG_DIR="/etc/l2bridge"
+WEBUI_PORT="8081"
+
+cmd_webui_install() {
+    log_info "Installing L2Bridge Web UI..."
+
+    # Create directories
+    mkdir -p "$WEBUI_ROOT/cgi-bin"
+    mkdir -p "$WEBUI_CONFIG_DIR"
+    mkdir -p /tmp/l2bridge
+
+    # Check if source files exist (for development install from local directory)
+    local script_dir=$(dirname "$(readlink -f "$0")")
+    local src_www="$script_dir/www/l2bridge"
+
+    if [ -d "$src_www" ]; then
+        log_info "Installing from local source: $src_www"
+        cp "$src_www/index.html" "$WEBUI_ROOT/"
+        cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
+    else
+        log_error "Web UI source files not found at $src_www"
+        log_info "Please ensure www/l2bridge directory exists alongside this script"
+        exit 1
+    fi
+
+    # Make CGI scripts executable
+    chmod +x "$WEBUI_ROOT/cgi-bin/"*.cgi
+
+    # Initialize aircraft config if not exists
+    if [ ! -f "$WEBUI_CONFIG_DIR/aircraft.json" ]; then
+        cat > "$WEBUI_CONFIG_DIR/aircraft.json" << 'AIRCRAFT_JSON'
+{
+  "version": 1,
+  "active": "",
+  "profiles": {}
+}
+AIRCRAFT_JSON
+    fi
+
+    # Configure uhttpd for web UI on port 8081
+    log_info "Configuring uhttpd on port $WEBUI_PORT..."
+
+    # Check if l2bridge uhttpd instance already exists
+    if uci get uhttpd.l2bridge >/dev/null 2>&1; then
+        log_info "Updating existing uhttpd configuration..."
+    else
+        log_info "Creating new uhttpd configuration..."
+        uci set uhttpd.l2bridge=uhttpd
+    fi
+
+    uci set uhttpd.l2bridge.listen_http="0.0.0.0:$WEBUI_PORT"
+    uci set uhttpd.l2bridge.home="$WEBUI_ROOT"
+    uci set uhttpd.l2bridge.cgi_prefix='/cgi-bin'
+    uci set uhttpd.l2bridge.script_timeout='300'
+    uci set uhttpd.l2bridge.no_symlinks='0'
+    uci set uhttpd.l2bridge.no_dirlists='1'
+    uci set uhttpd.l2bridge.rfc1918_filter='0'
+    uci commit uhttpd
+
+    # Restart uhttpd to apply changes
+    /etc/init.d/uhttpd restart
+
+    # Open firewall port if firewall is running
+    if command -v fw4 >/dev/null 2>&1 || [ -f /etc/config/firewall ]; then
+        log_info "Configuring firewall for port $WEBUI_PORT..."
+        if ! uci get firewall.l2bridge_webui >/dev/null 2>&1; then
+            uci set firewall.l2bridge_webui=rule
+            uci set firewall.l2bridge_webui.name='Allow-L2Bridge-WebUI'
+            uci set firewall.l2bridge_webui.src='lan'
+            uci set firewall.l2bridge_webui.proto='tcp'
+            uci set firewall.l2bridge_webui.dest_port="$WEBUI_PORT"
+            uci set firewall.l2bridge_webui.target='ACCEPT'
+            uci commit firewall
+            /etc/init.d/firewall reload 2>/dev/null || true
+        fi
+    fi
+
+    echo ""
+    echo "========================================="
+    echo "  L2Bridge Web UI Installed"
+    echo "========================================="
+    echo ""
+    echo "  Access the control panel at:"
+    echo "  http://$(get_tailscale_ip_nowait 2>/dev/null || echo '<router-ip>'):$WEBUI_PORT"
+    echo ""
+    echo "  Or from LAN:"
+    local lan_ip=$(ip -4 addr show br-lan 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+    [ -n "$lan_ip" ] && echo "  http://$lan_ip:$WEBUI_PORT"
+    echo ""
+}
+
+cmd_webui_remove() {
+    log_info "Removing L2Bridge Web UI..."
+
+    # Stop uhttpd temporarily
+    /etc/init.d/uhttpd stop 2>/dev/null || true
+
+    # Remove uhttpd configuration
+    if uci get uhttpd.l2bridge >/dev/null 2>&1; then
+        uci delete uhttpd.l2bridge
+        uci commit uhttpd
+    fi
+
+    # Remove firewall rule
+    if uci get firewall.l2bridge_webui >/dev/null 2>&1; then
+        uci delete firewall.l2bridge_webui
+        uci commit firewall
+        /etc/init.d/firewall reload 2>/dev/null || true
+    fi
+
+    # Remove web files
+    rm -rf "$WEBUI_ROOT"
+
+    # Keep config directory (contains aircraft profiles)
+    log_info "Aircraft profiles preserved in $WEBUI_CONFIG_DIR"
+
+    # Restart uhttpd
+    /etc/init.d/uhttpd start
+
+    echo "Web UI removed."
+}
+
+#############################################
 # MAIN
 #############################################
 CMD="$1"; shift 2>/dev/null || true
@@ -942,6 +1071,8 @@ case "$CMD" in
     monitor|mon) cmd_monitor "$@" ;;
     watchdog-install) cmd_watchdog_install ;;
     watchdog-remove) cmd_watchdog_remove ;;
+    webui-install) cmd_webui_install ;;
+    webui-remove) cmd_webui_remove ;;
     uninstall|remove) cmd_uninstall "$@" ;;
     help|-h|--help) print_usage ;;
     "") print_usage; exit 1 ;;

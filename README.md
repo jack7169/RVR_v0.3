@@ -157,6 +157,10 @@ Auto-Recovery:
   monitor [--daemon]      Health check and auto-repair
   watchdog-install        Install cron-based watchdog
   watchdog-remove         Remove watchdog
+
+Web UI:
+  webui-install           Install web control panel on port 8081
+  webui-remove            Remove web UI
 ```
 
 ### Examples
@@ -179,6 +183,9 @@ l2bridge logs 50
 
 # Full diagnostics
 l2bridge debug 100.73.192.107
+
+# Install web UI for browser-based control
+l2bridge webui-install
 ```
 
 ## Configuration
@@ -263,6 +270,73 @@ cat /tmp/l2bridge.health
 # System logs
 l2bridge logs 50
 ```
+
+## Web UI
+
+The L2 Bridge includes an optional web-based control panel for monitoring and managing aircraft connections from a browser.
+
+### Installation
+
+```bash
+# Install web UI (on GCS router)
+l2bridge webui-install
+```
+
+This installs the control panel on port 8081 and configures the firewall to allow LAN access.
+
+### Accessing the Web UI
+
+After installation, open in Chrome:
+
+```
+http://<router-lan-ip>:8081
+```
+
+Or via Tailscale:
+
+```
+http://<router-tailscale-ip>:8081
+```
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Status Dashboard** | Real-time GCS and aircraft status with service indicators |
+| **Connection Monitor** | Connection state, duration timer, health status |
+| **Bridge Controls** | Start, Stop, Restart, Setup, and Debug buttons |
+| **Aircraft Profiles** | Save multiple aircraft with user-defined names |
+| **Profile Switching** | Switch between aircraft from dropdown selector |
+| **Live Logs** | Real-time streaming of l2bridge, tinc, and kcptun logs |
+
+### Aircraft Profile Management
+
+The web UI allows saving aircraft Tailscale IPs with friendly names:
+
+1. Click **Manage** next to the aircraft selector
+2. Enter a Profile ID (e.g., `alpha`), Display Name (e.g., `Aircraft Alpha`), and Tailscale IP
+3. Click **Add Aircraft**
+4. Select the aircraft from the dropdown to make it active
+
+Profiles are stored in `/etc/l2bridge/aircraft.json` and persist across reboots.
+
+### Switching Aircraft
+
+To connect to a different aircraft:
+
+1. Select the aircraft from the dropdown in the header
+2. The l2bridge configuration is automatically updated
+3. Use **Setup** or **Start** to establish the connection
+
+This replaces running `l2bridge setup <new-ip>` from the command line.
+
+### Removing the Web UI
+
+```bash
+l2bridge webui-remove
+```
+
+This removes web files and uhttpd configuration but preserves aircraft profiles.
 
 ## Troubleshooting
 
@@ -376,7 +450,8 @@ Limited by Starlink uplink (~20-40 Mbps typical). Bridge adds minimal overhead w
 
 ```
 /usr/bin/l2bridge              # Main script
-/etc/l2bridge.conf             # Saved aircraft IP
+/etc/l2bridge.conf             # Saved aircraft IP (legacy)
+/etc/l2bridge/aircraft.json    # Aircraft profiles (web UI)
 /etc/tinc/l2bridge/            # Tinc configuration
 /etc/kcptun/server.json        # KCPtun config
 /etc/init.d/kcptun-server      # Init script
@@ -385,6 +460,10 @@ Limited by Starlink uplink (~20-40 Mbps typical). Bridge adds minimal overhead w
 /tmp/l2bridge-setup.log        # Setup log
 /tmp/l2bridge.health           # Health status
 /tmp/l2bridge-watchdog.log     # Watchdog log
+
+# Web UI (after webui-install)
+/www/l2bridge/index.html       # Web interface
+/www/l2bridge/cgi-bin/         # API endpoints
 ```
 
 ### Aircraft Router
