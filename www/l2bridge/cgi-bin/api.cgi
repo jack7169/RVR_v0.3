@@ -133,6 +133,7 @@ add_aircraft() {
     local id="$1"
     local name="$2"
     local ip="$3"
+    local password="$4"
 
     # Validate inputs
     [ -z "$id" ] && json_error "Profile ID is required"
@@ -155,14 +156,14 @@ add_aircraft() {
     current_active=$(sed -n 's/.*"active":[[:space:]]*"\([^"]*\)".*/\1/p' "$AIRCRAFT_FILE" | head -1)
 
     # Simple approach: rebuild the entire file
-    # Extract existing profiles as id|name|ip|created|last_used lines
+    # Extract existing profiles as id|name|ip|password|created|last_used lines
     local tmp_profiles=$(mktemp)
     awk '
     /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
-        # Extract profile id
         gsub(/.*"/, "")
         gsub(/".*/, "")
         current_id = $0
+        profiles[current_id]["password"] = ""
     }
     /"name":/ {
         gsub(/.*"name":[[:space:]]*"/, "")
@@ -174,6 +175,11 @@ add_aircraft() {
         gsub(/".*/, "")
         profiles[current_id]["ip"] = $0
     }
+    /"ssh_password":/ {
+        gsub(/.*"ssh_password":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["password"] = $0
+    }
     /"created":/ {
         gsub(/.*"created":[[:space:]]*"/, "")
         gsub(/".*/, "")
@@ -183,24 +189,24 @@ add_aircraft() {
         gsub(/.*"last_used":[[:space:]]*"/, "")
         gsub(/".*/, "")
         profiles[current_id]["last_used"] = $0
-        # Output complete profile
-        print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
+        print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["password"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
     }
     ' "$AIRCRAFT_FILE" > "$tmp_profiles"
 
-    # Add new profile to list
-    echo "$id|$name|$ip|$created|$created" >> "$tmp_profiles"
+    # Add new profile to list (password can be empty)
+    echo "$id|$name|$ip|$password|$created|$created" >> "$tmp_profiles"
 
     # Rebuild JSON file
     printf '{\n  "version": 1,\n  "active": "%s",\n  "profiles": {\n' "$current_active" > "$AIRCRAFT_FILE"
 
     local first=1
-    while IFS='|' read -r pid pname pip pcreated plast; do
+    while IFS='|' read -r pid pname pip ppass pcreated plast; do
         [ -z "$pid" ] && continue
         [ $first -eq 0 ] && printf ',\n' >> "$AIRCRAFT_FILE"
         printf '    "%s": {\n' "$pid" >> "$AIRCRAFT_FILE"
         printf '      "name": "%s",\n' "$pname" >> "$AIRCRAFT_FILE"
         printf '      "tailscale_ip": "%s",\n' "$pip" >> "$AIRCRAFT_FILE"
+        printf '      "ssh_password": "%s",\n' "$ppass" >> "$AIRCRAFT_FILE"
         printf '      "created": "%s",\n' "$pcreated" >> "$AIRCRAFT_FILE"
         printf '      "last_used": "%s"\n' "$plast" >> "$AIRCRAFT_FILE"
         printf '    }' >> "$AIRCRAFT_FILE"
@@ -218,6 +224,7 @@ update_aircraft() {
     local id="$1"
     local name="$2"
     local ip="$3"
+    local password="$4"
 
     [ -z "$id" ] && json_error "Profile ID is required"
     validate_id "$id" || json_error "Invalid profile ID format"
@@ -236,12 +243,20 @@ update_aircraft() {
     cp "$AIRCRAFT_FILE" "$tmp_file"
 
     if [ -n "$name" ]; then
-        # This is a simplified update - in production, use proper JSON tools
         sed -i "s/\"name\": \"[^\"]*\"/\"name\": \"$name\"/" "$tmp_file"
     fi
 
     if [ -n "$ip" ]; then
         sed -i "s/\"tailscale_ip\": \"[^\"]*\"/\"tailscale_ip\": \"$ip\"/" "$tmp_file"
+    fi
+
+    # Password update: use special marker __CLEAR__ to clear password
+    if [ -n "$password" ]; then
+        if [ "$password" = "__CLEAR__" ]; then
+            sed -i "s/\"ssh_password\": \"[^\"]*\"/\"ssh_password\": \"\"/" "$tmp_file"
+        else
+            sed -i "s/\"ssh_password\": \"[^\"]*\"/\"ssh_password\": \"$password\"/" "$tmp_file"
+        fi
     fi
 
     mv "$tmp_file" "$AIRCRAFT_FILE"
@@ -275,6 +290,7 @@ delete_aircraft() {
         gsub(/.*"/, "")
         gsub(/".*/, "")
         current_id = $0
+        profiles[current_id]["password"] = ""
     }
     /"name":/ {
         gsub(/.*"name":[[:space:]]*"/, "")
@@ -286,6 +302,11 @@ delete_aircraft() {
         gsub(/".*/, "")
         profiles[current_id]["ip"] = $0
     }
+    /"ssh_password":/ {
+        gsub(/.*"ssh_password":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["password"] = $0
+    }
     /"created":/ {
         gsub(/.*"created":[[:space:]]*"/, "")
         gsub(/".*/, "")
@@ -296,7 +317,7 @@ delete_aircraft() {
         gsub(/".*/, "")
         profiles[current_id]["last_used"] = $0
         if (current_id != delete_id) {
-            print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
+            print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["password"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
         }
     }
     ' "$AIRCRAFT_FILE" > "$tmp_profiles"
@@ -305,12 +326,13 @@ delete_aircraft() {
     printf '{\n  "version": 1,\n  "active": "%s",\n  "profiles": {\n' "$current_active" > "$AIRCRAFT_FILE"
 
     local first=1
-    while IFS='|' read -r pid pname pip pcreated plast; do
+    while IFS='|' read -r pid pname pip ppass pcreated plast; do
         [ -z "$pid" ] && continue
         [ $first -eq 0 ] && printf ',\n' >> "$AIRCRAFT_FILE"
         printf '    "%s": {\n' "$pid" >> "$AIRCRAFT_FILE"
         printf '      "name": "%s",\n' "$pname" >> "$AIRCRAFT_FILE"
         printf '      "tailscale_ip": "%s",\n' "$pip" >> "$AIRCRAFT_FILE"
+        printf '      "ssh_password": "%s",\n' "$ppass" >> "$AIRCRAFT_FILE"
         printf '      "created": "%s",\n' "$pcreated" >> "$AIRCRAFT_FILE"
         printf '      "last_used": "%s"\n' "$plast" >> "$AIRCRAFT_FILE"
         printf '    }' >> "$AIRCRAFT_FILE"
@@ -411,13 +433,15 @@ main() {
             local id=$(parse_json "id" "$post_data")
             local name=$(parse_json "name" "$post_data")
             local ip=$(parse_json "tailscale_ip" "$post_data")
-            add_aircraft "$id" "$name" "$ip"
+            local password=$(parse_json "ssh_password" "$post_data")
+            add_aircraft "$id" "$name" "$ip" "$password"
             ;;
         update_aircraft)
             local id=$(parse_json "id" "$post_data")
             local name=$(parse_json "name" "$post_data")
             local ip=$(parse_json "tailscale_ip" "$post_data")
-            update_aircraft "$id" "$name" "$ip"
+            local password=$(parse_json "ssh_password" "$post_data")
+            update_aircraft "$id" "$name" "$ip" "$password"
             ;;
         delete_aircraft)
             local id=$(parse_json "id" "$post_data")

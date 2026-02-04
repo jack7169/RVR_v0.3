@@ -191,20 +191,45 @@ ssh_key_works() {
 
 setup_ssh_keys() {
     local ip="$1"
+    local password="$2"
     ensure_ssh_key
     if ssh_key_works "$ip"; then
         echo "[*] SSH key auth already configured for $ip"
         return 0
     fi
-    echo "[*] Installing SSH key on $ip (enter password once)..."
+
     local pubkey=$(cat "$SSH_PUBKEY")
-    dbclient -y root@"$ip" "mkdir -p /etc/dropbear && echo '$pubkey' >> /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys && sort -u /etc/dropbear/authorized_keys -o /etc/dropbear/authorized_keys"
+    local ssh_cmd="mkdir -p /etc/dropbear && echo '$pubkey' >> /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys && sort -u /etc/dropbear/authorized_keys -o /etc/dropbear/authorized_keys"
+
+    if [ -n "$password" ]; then
+        # Non-interactive: use sshpass if available
+        echo "[*] Installing SSH key on $ip (using stored password)..."
+        if command -v sshpass >/dev/null 2>&1; then
+            sshpass -p "$password" dbclient -y root@"$ip" "$ssh_cmd" 2>/dev/null
+        else
+            # Fallback: install sshpass first
+            echo "    Installing sshpass..."
+            opkg update >/dev/null 2>&1
+            opkg install sshpass >/dev/null 2>&1
+            if command -v sshpass >/dev/null 2>&1; then
+                sshpass -p "$password" dbclient -y root@"$ip" "$ssh_cmd" 2>/dev/null
+            else
+                echo "    ERROR: sshpass not available. Please install SSH key manually."
+                return 1
+            fi
+        fi
+    else
+        # Interactive: prompt for password
+        echo "[*] Installing SSH key on $ip (enter password once)..."
+        dbclient -y root@"$ip" "$ssh_cmd"
+    fi
+
     sleep 1
     if ssh_key_works "$ip"; then
         echo "    SSH key installed successfully."
     else
         echo "    ERROR: Key auth failed."
-        exit 1
+        return 1
     fi
 }
 
@@ -484,15 +509,42 @@ cmd_setup() {
     echo "[*] Testing connectivity..."
     check_aircraft_reachable "$AIRCRAFT_IP" || { echo "ERROR: Cannot reach aircraft"; exit 1; }
     echo "    Aircraft reachable."
-    
-    # Check aircraft bridge setup
+
+    # Get password from aircraft profile if available (for non-interactive setup)
+    local aircraft_password=""
+    if [ -f "/etc/l2bridge/aircraft.json" ]; then
+        # Try to get password for this IP from profiles
+        # Parse JSON: find profile with matching IP and extract its password
+        aircraft_password=$(awk -v ip="$AIRCRAFT_IP" '
+            BEGIN { in_profile=0; current_ip=""; current_pass="" }
+            /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ { in_profile=1; current_ip=""; current_pass="" }
+            in_profile && /"tailscale_ip":/ {
+                gsub(/.*"tailscale_ip":[[:space:]]*"/, ""); gsub(/".*/, "")
+                current_ip = $0
+            }
+            in_profile && /"ssh_password":/ {
+                gsub(/.*"ssh_password":[[:space:]]*"/, ""); gsub(/".*/, "")
+                current_pass = $0
+            }
+            /\}/ {
+                if (in_profile && current_ip == ip && current_pass != "") {
+                    print current_pass
+                    exit
+                }
+                in_profile = 0
+            }
+        ' /etc/l2bridge/aircraft.json 2>/dev/null)
+    fi
+
+    # Setup SSH keys first (before any SSH operations)
+    setup_ssh_keys "$AIRCRAFT_IP" "$aircraft_password" || exit 1
+
+    # Now check aircraft bridge with SSH
     echo "[*] Checking aircraft bridge configuration..."
-    ssh_aircraft "$AIRCRAFT_IP" "ip link show type bridge; bridge link show" 2>/dev/null || echo "    (SSH not yet configured)"
+    ssh_aircraft "$AIRCRAFT_IP" "ip link show type bridge; bridge link show" 2>/dev/null || echo "    (Could not query aircraft)"
     echo ""
 
-    setup_ssh_keys "$AIRCRAFT_IP"
-    
-    # Now check aircraft with SSH
+    # Aircraft pre-flight checks
     echo "[*] Aircraft pre-flight checks..."
     log_cmd "Aircraft bridges" ssh_aircraft "$AIRCRAFT_IP" "ip link show type bridge"
     log_cmd "Aircraft br-lan" ssh_aircraft "$AIRCRAFT_IP" "ip link show br-lan 2>/dev/null || ip link show | grep -E 'br-|bridge'"

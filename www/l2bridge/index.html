@@ -844,6 +844,13 @@
                     <label for="new-aircraft-ip">Tailscale IP</label>
                     <input type="text" id="new-aircraft-ip" placeholder="e.g., 100.73.192.107">
                 </div>
+                <div class="form-group">
+                    <label for="new-aircraft-password">SSH Password <span style="color: var(--text-muted); font-weight: normal;">(for first-time setup)</span></label>
+                    <input type="password" id="new-aircraft-password" placeholder="Router root password">
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
+                        Used once to install SSH key. Can be cleared after setup.
+                    </small>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="hideAircraftModal()">Close</button>
@@ -1211,12 +1218,17 @@
             state.aircraft.forEach(aircraft => {
                 const item = document.createElement('li');
                 item.className = 'aircraft-item' + (aircraft.id === state.activeAircraft ? ' active' : '');
+                const hasPassword = aircraft.ssh_password && aircraft.ssh_password.length > 0;
                 item.innerHTML = `
                     <div class="aircraft-info">
                         <h4>${escapeHtml(aircraft.name)}</h4>
                         <p>${escapeHtml(aircraft.tailscale_ip)}</p>
+                        <small style="color: ${hasPassword ? 'var(--status-running)' : 'var(--text-muted)'}; font-size: 0.7rem;">
+                            ${hasPassword ? '&#128274; Password stored' : '&#128275; No password (key auth)'}
+                        </small>
                     </div>
                     <div class="aircraft-actions">
+                        ${hasPassword ? `<button class="btn-icon" onclick="event.stopPropagation(); clearPassword('${aircraft.id}')" title="Clear Password" style="font-size: 0.7rem;">&#128274;</button>` : ''}
                         <button class="btn-icon" onclick="event.stopPropagation(); setActiveAircraft('${aircraft.id}')" title="Set Active">
                             &#10003;
                         </button>
@@ -1260,9 +1272,10 @@
             const id = document.getElementById('new-aircraft-id').value.trim();
             const name = document.getElementById('new-aircraft-name').value.trim();
             const ip = document.getElementById('new-aircraft-ip').value.trim();
+            const password = document.getElementById('new-aircraft-password').value;
 
             if (!id || !name || !ip) {
-                showToast('Please fill in all fields', 'error');
+                showToast('Please fill in ID, name, and IP', 'error');
                 return;
             }
 
@@ -1284,7 +1297,8 @@
                         action: 'add_aircraft',
                         id: id,
                         name: name,
-                        tailscale_ip: ip
+                        tailscale_ip: ip,
+                        ssh_password: password
                     })
                 });
 
@@ -1295,6 +1309,7 @@
                     document.getElementById('new-aircraft-id').value = '';
                     document.getElementById('new-aircraft-name').value = '';
                     document.getElementById('new-aircraft-ip').value = '';
+                    document.getElementById('new-aircraft-password').value = '';
                     loadAircraftProfiles();
                 } else {
                     showToast(result.error || 'Failed to add aircraft', 'error');
@@ -1326,6 +1341,35 @@
                 }
             } catch (error) {
                 showToast('Failed to delete aircraft', 'error');
+            }
+        }
+
+        async function clearPassword(id) {
+            if (!confirm('Clear stored password for this aircraft? You will need to enter the password again for future setups.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'update_aircraft',
+                        id: id,
+                        ssh_password: '__CLEAR__'
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast('Password cleared', 'success');
+                    loadAircraftProfiles();
+                } else {
+                    showToast(result.error || 'Failed to clear password', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to clear password', 'error');
             }
         }
 
