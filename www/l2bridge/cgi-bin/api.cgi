@@ -59,13 +59,7 @@ release_lock() {
 init_aircraft_file() {
     mkdir -p "$CONFIG_DIR"
     if [ ! -f "$AIRCRAFT_FILE" ]; then
-        cat > "$AIRCRAFT_FILE" << 'EOF'
-{
-  "version": 1,
-  "active": "",
-  "profiles": {}
-}
-EOF
+        printf '{\n  "version": 1,\n  "active": "",\n  "profiles": {}\n}\n' > "$AIRCRAFT_FILE"
     fi
 }
 

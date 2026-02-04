@@ -961,13 +961,7 @@ cmd_webui_install() {
 
     # Initialize aircraft config if not exists
     if [ ! -f "$WEBUI_CONFIG_DIR/aircraft.json" ]; then
-        cat > "$WEBUI_CONFIG_DIR/aircraft.json" << 'AIRCRAFT_JSON'
-{
-  "version": 1,
-  "active": "",
-  "profiles": {}
-}
-AIRCRAFT_JSON
+        printf '{\n  "version": 1,\n  "active": "",\n  "profiles": {}\n}\n' > "$WEBUI_CONFIG_DIR/aircraft.json"
     fi
 
     # Configure uhttpd for web UI on port 8081
