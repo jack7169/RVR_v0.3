@@ -134,48 +134,71 @@ add_aircraft() {
     init_aircraft_file
 
     # Check if ID already exists
-    if grep -q "\"$id\"" "$AIRCRAFT_FILE"; then
+    if grep -q "\"$id\":" "$AIRCRAFT_FILE"; then
         json_error "Profile ID already exists"
     fi
 
     local created=$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
 
-    # Use a temporary file for atomic update
-    local tmp_file=$(mktemp)
+    # Get current active
+    local current_active=""
+    current_active=$(sed -n 's/.*"active":[[:space:]]*"\([^"]*\)".*/\1/p' "$AIRCRAFT_FILE" | head -1)
 
-    # Add the new profile using awk
-    awk -v id="$id" -v name="$name" -v ip="$ip" -v created="$created" '
-    BEGIN { added = 0 }
-    /"profiles"[[:space:]]*:[[:space:]]*\{/ {
-        print
-        if (getline next_line > 0) {
-            if (next_line ~ /^[[:space:]]*\}/) {
-                # Empty profiles object
-                printf "    \"%s\": {\n", id
-                printf "      \"name\": \"%s\",\n", name
-                printf "      \"tailscale_ip\": \"%s\",\n", ip
-                printf "      \"created\": \"%s\",\n", created
-                printf "      \"last_used\": \"%s\"\n", created
-                printf "    }\n"
-                added = 1
-            } else {
-                # Has existing profiles
-                printf "    \"%s\": {\n", id
-                printf "      \"name\": \"%s\",\n", name
-                printf "      \"tailscale_ip\": \"%s\",\n", ip
-                printf "      \"created\": \"%s\",\n", created
-                printf "      \"last_used\": \"%s\"\n", created
-                printf "    },\n"
-                added = 1
-            }
-            print next_line
-        }
-        next
+    # Simple approach: rebuild the entire file
+    # Extract existing profiles as id|name|ip|created|last_used lines
+    local tmp_profiles=$(mktemp)
+    awk '
+    /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
+        # Extract profile id
+        gsub(/.*"/, "")
+        gsub(/".*/, "")
+        current_id = $0
     }
-    { print }
-    ' "$AIRCRAFT_FILE" > "$tmp_file"
+    /"name":/ {
+        gsub(/.*"name":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["name"] = $0
+    }
+    /"tailscale_ip":/ {
+        gsub(/.*"tailscale_ip":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["ip"] = $0
+    }
+    /"created":/ {
+        gsub(/.*"created":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["created"] = $0
+    }
+    /"last_used":/ {
+        gsub(/.*"last_used":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["last_used"] = $0
+        # Output complete profile
+        print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
+    }
+    ' "$AIRCRAFT_FILE" > "$tmp_profiles"
 
-    mv "$tmp_file" "$AIRCRAFT_FILE"
+    # Add new profile to list
+    echo "$id|$name|$ip|$created|$created" >> "$tmp_profiles"
+
+    # Rebuild JSON file
+    printf '{\n  "version": 1,\n  "active": "%s",\n  "profiles": {\n' "$current_active" > "$AIRCRAFT_FILE"
+
+    local first=1
+    while IFS='|' read -r pid pname pip pcreated plast; do
+        [ -z "$pid" ] && continue
+        [ $first -eq 0 ] && printf ',\n' >> "$AIRCRAFT_FILE"
+        printf '    "%s": {\n' "$pid" >> "$AIRCRAFT_FILE"
+        printf '      "name": "%s",\n' "$pname" >> "$AIRCRAFT_FILE"
+        printf '      "tailscale_ip": "%s",\n' "$pip" >> "$AIRCRAFT_FILE"
+        printf '      "created": "%s",\n' "$pcreated" >> "$AIRCRAFT_FILE"
+        printf '      "last_used": "%s"\n' "$plast" >> "$AIRCRAFT_FILE"
+        printf '    }' >> "$AIRCRAFT_FILE"
+        first=0
+    done < "$tmp_profiles"
+
+    printf '\n  }\n}\n' >> "$AIRCRAFT_FILE"
+    rm -f "$tmp_profiles"
 
     json_response "{\"success\": true, \"message\": \"Aircraft profile added\", \"id\": \"$id\"}"
 }
@@ -225,50 +248,67 @@ delete_aircraft() {
 
     init_aircraft_file
 
-    # Check if it's the active profile
-    local active=$(grep -o '"active"[[:space:]]*:[[:space:]]*"[^"]*"' "$AIRCRAFT_FILE" | sed 's/.*"\([^"]*\)"$/\1/')
-    if [ "$active" = "$id" ]; then
-        # Clear active selection
-        sed -i 's/"active"[[:space:]]*:[[:space:]]*"[^"]*"/"active": ""/' "$AIRCRAFT_FILE"
+    # Check if profile exists
+    if ! grep -q "\"$id\":" "$AIRCRAFT_FILE"; then
+        json_error "Profile not found"
     fi
 
-    # Remove the profile (simplified - removes the block)
-    # For production, use proper JSON tools like jq
-    local tmp_file=$(mktemp)
+    # Get current active, clear if it's the one being deleted
+    local current_active=""
+    current_active=$(sed -n 's/.*"active":[[:space:]]*"\([^"]*\)".*/\1/p' "$AIRCRAFT_FILE" | head -1)
+    [ "$current_active" = "$id" ] && current_active=""
 
-    awk -v id="$id" '
-    BEGIN { skip = 0; brace_count = 0 }
-    {
-        if ($0 ~ "\"" id "\"[[:space:]]*:[[:space:]]*\\{") {
-            skip = 1
-            brace_count = 1
-            # Remove trailing comma from previous line if exists
-            if (NR > 1 && prev ~ /,$/) {
-                sub(/,$/, "", prev)
-            }
-            next
-        }
-        if (skip) {
-            gsub(/[^{}]/, "", $0)
-            brace_count += gsub(/{/, "{")
-            brace_count -= gsub(/}/, "}")
-            if (brace_count <= 0) {
-                skip = 0
-                # Skip trailing comma
-                getline
-                if ($0 !~ /^[[:space:]]*,/) {
-                    print
-                }
-            }
-            next
-        }
-        if (NR > 1) print prev
-        prev = $0
+    # Extract all profiles except the one being deleted
+    local tmp_profiles=$(mktemp)
+    awk -v delete_id="$id" '
+    /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
+        gsub(/.*"/, "")
+        gsub(/".*/, "")
+        current_id = $0
     }
-    END { if (!skip) print prev }
-    ' "$AIRCRAFT_FILE" > "$tmp_file"
+    /"name":/ {
+        gsub(/.*"name":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["name"] = $0
+    }
+    /"tailscale_ip":/ {
+        gsub(/.*"tailscale_ip":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["ip"] = $0
+    }
+    /"created":/ {
+        gsub(/.*"created":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["created"] = $0
+    }
+    /"last_used":/ {
+        gsub(/.*"last_used":[[:space:]]*"/, "")
+        gsub(/".*/, "")
+        profiles[current_id]["last_used"] = $0
+        if (current_id != delete_id) {
+            print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
+        }
+    }
+    ' "$AIRCRAFT_FILE" > "$tmp_profiles"
 
-    mv "$tmp_file" "$AIRCRAFT_FILE"
+    # Rebuild JSON file
+    printf '{\n  "version": 1,\n  "active": "%s",\n  "profiles": {\n' "$current_active" > "$AIRCRAFT_FILE"
+
+    local first=1
+    while IFS='|' read -r pid pname pip pcreated plast; do
+        [ -z "$pid" ] && continue
+        [ $first -eq 0 ] && printf ',\n' >> "$AIRCRAFT_FILE"
+        printf '    "%s": {\n' "$pid" >> "$AIRCRAFT_FILE"
+        printf '      "name": "%s",\n' "$pname" >> "$AIRCRAFT_FILE"
+        printf '      "tailscale_ip": "%s",\n' "$pip" >> "$AIRCRAFT_FILE"
+        printf '      "created": "%s",\n' "$pcreated" >> "$AIRCRAFT_FILE"
+        printf '      "last_used": "%s"\n' "$plast" >> "$AIRCRAFT_FILE"
+        printf '    }' >> "$AIRCRAFT_FILE"
+        first=0
+    done < "$tmp_profiles"
+
+    printf '\n  }\n}\n' >> "$AIRCRAFT_FILE"
+    rm -f "$tmp_profiles"
 
     json_response "{\"success\": true, \"message\": \"Aircraft profile deleted\"}"
 }
