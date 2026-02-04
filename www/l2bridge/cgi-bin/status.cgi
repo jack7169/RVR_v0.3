@@ -113,6 +113,63 @@ if [ -n "$AIRCRAFT_IP" ]; then
     fi
 fi
 
+# Get Tailscale peer connection info for aircraft
+TS_PEER_MODE="unknown"
+TS_PEER_RELAY=""
+TS_PEER_LATENCY=""
+TS_PEER_TX=""
+TS_PEER_RX=""
+
+if [ -n "$AIRCRAFT_IP" ]; then
+    # Parse tailscale status for the aircraft peer
+    TS_STATUS=$(tailscale status 2>/dev/null | grep "$AIRCRAFT_IP" | head -1)
+    if [ -n "$TS_STATUS" ]; then
+        # Check if connection is direct or relayed
+        # Direct connections show "direct" in the output
+        # Relayed connections show "relay" or DERP server name
+        if echo "$TS_STATUS" | grep -qi "direct"; then
+            TS_PEER_MODE="direct"
+        elif echo "$TS_STATUS" | grep -qiE "relay|derp"; then
+            TS_PEER_MODE="relay"
+            # Try to extract relay server name
+            TS_PEER_RELAY=$(echo "$TS_STATUS" | grep -oE 'relay "[^"]+"' | sed 's/relay "//;s/"//' || echo "")
+        elif echo "$TS_STATUS" | grep -qi "idle"; then
+            TS_PEER_MODE="idle"
+        else
+            # Check for active connection without explicit mode
+            if echo "$TS_STATUS" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+'; then
+                TS_PEER_MODE="direct"
+            fi
+        fi
+    fi
+
+    # Try to get more detailed info from tailscale status --json if available
+    if command -v jq >/dev/null 2>&1; then
+        TS_JSON=$(tailscale status --json 2>/dev/null)
+        if [ -n "$TS_JSON" ]; then
+            # Extract peer info for aircraft IP
+            PEER_INFO=$(echo "$TS_JSON" | jq -r --arg ip "$AIRCRAFT_IP" '.Peer | to_entries[] | select(.value.TailscaleIPs[]? == $ip) | .value' 2>/dev/null)
+            if [ -n "$PEER_INFO" ]; then
+                # Check CurAddr - if it contains the real IP, it's direct; if DERP, it's relayed
+                CUR_ADDR=$(echo "$PEER_INFO" | jq -r '.CurAddr // ""' 2>/dev/null)
+                if [ -n "$CUR_ADDR" ]; then
+                    if echo "$CUR_ADDR" | grep -q "^derp"; then
+                        TS_PEER_MODE="relay"
+                        TS_PEER_RELAY=$(echo "$CUR_ADDR" | sed 's/derp-//' | cut -d: -f1)
+                    else
+                        TS_PEER_MODE="direct"
+                    fi
+                fi
+
+                # Get latency and transfer stats if available
+                TS_PEER_LATENCY=$(echo "$PEER_INFO" | jq -r '.LastSeen // ""' 2>/dev/null)
+                TS_PEER_RX=$(echo "$PEER_INFO" | jq -r '.RxBytes // 0' 2>/dev/null)
+                TS_PEER_TX=$(echo "$PEER_INFO" | jq -r '.TxBytes // 0' 2>/dev/null)
+            fi
+        fi
+    fi
+fi
+
 # Determine connection status
 CONNECTION_ESTABLISHED="false"
 CONNECTION_DURATION=0
@@ -132,6 +189,49 @@ else
     # Clear connection tracking if not connected
     rm -f "$CONNECTED_SINCE_FILE" 2>/dev/null
 fi
+
+# Network statistics for l2bridge interface
+L2B_STATS_DIR="/sys/class/net/l2bridge/statistics"
+L2B_RX_BYTES=0
+L2B_TX_BYTES=0
+L2B_RX_PACKETS=0
+L2B_TX_PACKETS=0
+L2B_RX_ERRORS=0
+L2B_TX_ERRORS=0
+L2B_RX_DROPPED=0
+L2B_TX_DROPPED=0
+L2B_MULTICAST=0
+
+if [ -d "$L2B_STATS_DIR" ]; then
+    L2B_RX_BYTES=$(cat "$L2B_STATS_DIR/rx_bytes" 2>/dev/null || echo 0)
+    L2B_TX_BYTES=$(cat "$L2B_STATS_DIR/tx_bytes" 2>/dev/null || echo 0)
+    L2B_RX_PACKETS=$(cat "$L2B_STATS_DIR/rx_packets" 2>/dev/null || echo 0)
+    L2B_TX_PACKETS=$(cat "$L2B_STATS_DIR/tx_packets" 2>/dev/null || echo 0)
+    L2B_RX_ERRORS=$(cat "$L2B_STATS_DIR/rx_errors" 2>/dev/null || echo 0)
+    L2B_TX_ERRORS=$(cat "$L2B_STATS_DIR/tx_errors" 2>/dev/null || echo 0)
+    L2B_RX_DROPPED=$(cat "$L2B_STATS_DIR/rx_dropped" 2>/dev/null || echo 0)
+    L2B_TX_DROPPED=$(cat "$L2B_STATS_DIR/tx_dropped" 2>/dev/null || echo 0)
+    L2B_MULTICAST=$(cat "$L2B_STATS_DIR/multicast" 2>/dev/null || echo 0)
+fi
+
+# Tailscale interface statistics (for WAN traffic comparison)
+TS_IFACE=$(ip route get 100.64.0.1 2>/dev/null | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -1)
+TS_IFACE="${TS_IFACE:-tailscale0}"
+TS_STATS_DIR="/sys/class/net/$TS_IFACE/statistics"
+TS_RX_BYTES=0
+TS_TX_BYTES=0
+TS_RX_PACKETS=0
+TS_TX_PACKETS=0
+
+if [ -d "$TS_STATS_DIR" ]; then
+    TS_RX_BYTES=$(cat "$TS_STATS_DIR/rx_bytes" 2>/dev/null || echo 0)
+    TS_TX_BYTES=$(cat "$TS_STATS_DIR/tx_bytes" 2>/dev/null || echo 0)
+    TS_RX_PACKETS=$(cat "$TS_STATS_DIR/rx_packets" 2>/dev/null || echo 0)
+    TS_TX_PACKETS=$(cat "$TS_STATS_DIR/tx_packets" 2>/dev/null || echo 0)
+fi
+
+# Get current timestamp in milliseconds for rate calculation
+STATS_TIMESTAMP=$(date +%s%3N 2>/dev/null || echo $(($(date +%s) * 1000)))
 
 # Output JSON response
 cat << EOF
@@ -163,6 +263,12 @@ cat << EOF
     "profile_name": "${AIRCRAFT_NAME:-None}",
     "tailscale_ip": "${AIRCRAFT_IP:-}",
     "reachable": $AIRCRAFT_REACHABLE,
+    "tailscale_peer": {
+      "mode": "$TS_PEER_MODE",
+      "relay": "${TS_PEER_RELAY:-}",
+      "rx_bytes": ${TS_PEER_RX:-0},
+      "tx_bytes": ${TS_PEER_TX:-0}
+    },
     "services": {
       "kcptun_client": "$AIRCRAFT_KCPTUN",
       "tincd": "$AIRCRAFT_TINCD",
@@ -172,6 +278,27 @@ cat << EOF
   "connection": {
     "established": $CONNECTION_ESTABLISHED,
     "duration_seconds": $CONNECTION_DURATION
+  },
+  "network_stats": {
+    "timestamp_ms": $STATS_TIMESTAMP,
+    "l2bridge": {
+      "rx_bytes": $L2B_RX_BYTES,
+      "tx_bytes": $L2B_TX_BYTES,
+      "rx_packets": $L2B_RX_PACKETS,
+      "tx_packets": $L2B_TX_PACKETS,
+      "rx_errors": $L2B_RX_ERRORS,
+      "tx_errors": $L2B_TX_ERRORS,
+      "rx_dropped": $L2B_RX_DROPPED,
+      "tx_dropped": $L2B_TX_DROPPED,
+      "multicast": $L2B_MULTICAST
+    },
+    "tailscale": {
+      "interface": "$TS_IFACE",
+      "rx_bytes": $TS_RX_BYTES,
+      "tx_bytes": $TS_TX_BYTES,
+      "rx_packets": $TS_RX_PACKETS,
+      "tx_packets": $TS_TX_PACKETS
+    }
   }
 }
 EOF

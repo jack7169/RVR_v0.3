@@ -209,6 +209,9 @@
         .status-value.up { color: var(--success); }
         .status-value.down { color: var(--error); }
         .status-value.unknown { color: var(--text-secondary); }
+        .status-value.direct { color: var(--success); }
+        .status-value.relay { color: var(--warning); }
+        .status-value.idle { color: var(--text-secondary); }
 
         /* Connection Status Bar */
         .connection-bar {
@@ -256,6 +259,139 @@
             font-size: 0.75rem;
             color: var(--text-secondary);
             text-transform: uppercase;
+        }
+
+        /* Network Statistics Panel */
+        .stats-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .stats-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stats-title {
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .stats-interface {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: var(--bg);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-box {
+            background: var(--bg);
+            border-radius: 6px;
+            padding: 0.75rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+
+        .stat-icon {
+            font-size: 1.25rem;
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+
+        .stat-icon.download {
+            background: rgba(46, 204, 113, 0.15);
+            color: var(--success);
+        }
+
+        .stat-icon.upload {
+            background: rgba(52, 152, 219, 0.15);
+            color: #3498db;
+        }
+
+        .stat-icon.packets {
+            background: rgba(155, 89, 182, 0.15);
+            color: #9b59b6;
+        }
+
+        .stat-icon.errors {
+            background: rgba(231, 76, 60, 0.15);
+            color: var(--error);
+        }
+
+        .stat-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .stat-box .stat-value {
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: 'Monaco', 'Menlo', monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .stat-box .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            margin-top: 0.125rem;
+        }
+
+        .stat-total {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-family: 'Monaco', 'Menlo', monospace;
+            margin-top: 0.25rem;
+        }
+
+        .stats-details {
+            background: var(--bg);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        .stats-row {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            color: var(--text-secondary);
+        }
+
+        .stats-row span:nth-child(even) {
+            font-family: 'Monaco', 'Menlo', monospace;
+            color: var(--text);
         }
 
         /* Controls */
@@ -750,6 +886,10 @@
                     <span class="status-value" id="aircraft-reachable">--</span>
                 </div>
                 <div class="status-row">
+                    <span class="status-label">Tailscale Link</span>
+                    <span class="status-value" id="aircraft-ts-mode">--</span>
+                </div>
+                <div class="status-row">
                     <span class="status-label">KCPtun Client</span>
                     <span class="status-value" id="aircraft-kcptun">--</span>
                 </div>
@@ -760,6 +900,62 @@
                 <div class="status-row">
                     <span class="status-label">L2Bridge Interface</span>
                     <span class="status-value" id="aircraft-iface">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Network Statistics -->
+        <div class="stats-panel">
+            <div class="stats-header">
+                <span class="stats-title">Network Statistics</span>
+                <span class="stats-interface">l2bridge</span>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-icon download">&#8595;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-rx-rate">0 B/s</div>
+                        <div class="stat-label">Download</div>
+                        <div class="stat-total" id="stat-rx-total">Total: 0 B</div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-icon upload">&#8593;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-tx-rate">0 B/s</div>
+                        <div class="stat-label">Upload</div>
+                        <div class="stat-total" id="stat-tx-total">Total: 0 B</div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-icon packets">&#9641;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-pkt-rate">0 pkt/s</div>
+                        <div class="stat-label">Packets</div>
+                        <div class="stat-total" id="stat-pkt-total">Total: 0</div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-icon errors">&#9888;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-errors">0</div>
+                        <div class="stat-label">Errors</div>
+                        <div class="stat-total" id="stat-dropped">Dropped: 0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="stats-details">
+                <div class="stats-row">
+                    <span>RX Packets:</span>
+                    <span id="stat-rx-packets">0</span>
+                    <span>TX Packets:</span>
+                    <span id="stat-tx-packets">0</span>
+                </div>
+                <div class="stats-row">
+                    <span>Multicast:</span>
+                    <span id="stat-multicast">0</span>
+                    <span>Tailscale:</span>
+                    <span id="stat-ts-total">0 B</span>
                 </div>
             </div>
         </div>
@@ -894,8 +1090,32 @@
             activeAircraft: null,
             logsPaused: false,
             eventSource: null,
-            connectionStartTime: null
+            connectionStartTime: null,
+            prevStats: null  // For rate calculation
         };
+
+        // Format bytes to human readable
+        function formatBytes(bytes, decimals = 1) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
+        }
+
+        // Format bytes per second
+        function formatBytesPerSec(bytesPerSec) {
+            if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
+            if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+            return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
+        }
+
+        // Format packets
+        function formatPackets(packets) {
+            if (packets < 1000) return packets.toString();
+            if (packets < 1000000) return (packets / 1000).toFixed(1) + 'K';
+            return (packets / 1000000).toFixed(2) + 'M';
+        }
 
         // Initialize application
         document.addEventListener('DOMContentLoaded', () => {
@@ -944,6 +1164,19 @@
             setText('aircraft-name', data.aircraft.profile_name || 'None');
             setText('aircraft-ip', data.aircraft.tailscale_ip || 'N/A');
             setText('aircraft-reachable', data.aircraft.reachable ? 'Yes' : 'No');
+
+            // Tailscale peer connection mode
+            const tsMode = data.aircraft.tailscale_peer?.mode || 'unknown';
+            const tsModeEl = document.getElementById('aircraft-ts-mode');
+            if (tsModeEl) {
+                let displayText = tsMode.charAt(0).toUpperCase() + tsMode.slice(1);
+                if (tsMode === 'relay' && data.aircraft.tailscale_peer?.relay) {
+                    displayText += ` (${data.aircraft.tailscale_peer.relay})`;
+                }
+                tsModeEl.textContent = displayText;
+                tsModeEl.className = 'status-value ' + tsMode;
+            }
+
             setStatusValue('aircraft-kcptun', data.aircraft.services.kcptun_client);
             setStatusValue('aircraft-tincd', data.aircraft.services.tincd);
             setStatusValue('aircraft-iface', data.aircraft.services.l2bridge_interface);
@@ -978,6 +1211,59 @@
             if (data.aircraft.id) {
                 document.getElementById('aircraft-select').value = data.aircraft.id;
             }
+
+            // Update Network Statistics
+            if (data.network_stats) {
+                updateNetworkStats(data.network_stats);
+            }
+        }
+
+        function updateNetworkStats(stats) {
+            const l2b = stats.l2bridge;
+            const ts = stats.tailscale;
+            const now = stats.timestamp_ms;
+
+            // Calculate rates if we have previous stats
+            if (state.prevStats && state.prevStats.timestamp_ms) {
+                const timeDelta = (now - state.prevStats.timestamp_ms) / 1000; // seconds
+                if (timeDelta > 0 && timeDelta < 30) { // Sanity check
+                    const prevL2b = state.prevStats.l2bridge;
+
+                    // Calculate byte rates
+                    const rxRate = (l2b.rx_bytes - prevL2b.rx_bytes) / timeDelta;
+                    const txRate = (l2b.tx_bytes - prevL2b.tx_bytes) / timeDelta;
+
+                    // Calculate packet rates
+                    const rxPktRate = (l2b.rx_packets - prevL2b.rx_packets) / timeDelta;
+                    const txPktRate = (l2b.tx_packets - prevL2b.tx_packets) / timeDelta;
+                    const totalPktRate = rxPktRate + txPktRate;
+
+                    // Update rate displays
+                    setText('stat-rx-rate', formatBytesPerSec(Math.max(0, rxRate)));
+                    setText('stat-tx-rate', formatBytesPerSec(Math.max(0, txRate)));
+                    setText('stat-pkt-rate', Math.max(0, totalPktRate).toFixed(0) + ' pkt/s');
+                }
+            }
+
+            // Update totals (always)
+            setText('stat-rx-total', 'Total: ' + formatBytes(l2b.rx_bytes));
+            setText('stat-tx-total', 'Total: ' + formatBytes(l2b.tx_bytes));
+            setText('stat-pkt-total', 'Total: ' + formatPackets(l2b.rx_packets + l2b.tx_packets));
+
+            // Update errors
+            const totalErrors = l2b.rx_errors + l2b.tx_errors;
+            const totalDropped = l2b.rx_dropped + l2b.tx_dropped;
+            setText('stat-errors', formatPackets(totalErrors));
+            setText('stat-dropped', 'Dropped: ' + formatPackets(totalDropped));
+
+            // Update details
+            setText('stat-rx-packets', formatPackets(l2b.rx_packets));
+            setText('stat-tx-packets', formatPackets(l2b.tx_packets));
+            setText('stat-multicast', formatPackets(l2b.multicast));
+            setText('stat-ts-total', formatBytes(ts.rx_bytes + ts.tx_bytes));
+
+            // Store for next rate calculation
+            state.prevStats = stats;
         }
 
         function setText(id, value) {
