@@ -25,7 +25,17 @@ json_error() {
 
 # Helper: escape string for JSON
 json_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n' '\\n' | sed 's/\\n$//'
+    printf '%s' "$1" | awk '
+    BEGIN { ORS="" }
+    {
+        gsub(/\\/, "\\\\")      # Escape backslashes first
+        gsub(/"/, "\\\"")       # Escape double quotes
+        gsub(/\t/, "\\t")       # Escape tabs
+        gsub(/\r/, "")          # Remove carriage returns
+        if (NR > 1) print "\\n" # Add escaped newline between lines
+        print
+    }
+    '
 }
 
 # Helper: validate Tailscale IP format (100.x.x.x)
