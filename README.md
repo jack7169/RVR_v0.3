@@ -141,6 +141,7 @@ l2bridge <command> [options]
 
 Setup & Control:
   setup <aircraft_ip>     Full setup of both GCS and Aircraft
+  add <aircraft_ip>       Connect to an already-setup aircraft (no reinstall)
   start <aircraft_ip>     Start services on both sides
   stop [aircraft_ip]      Stop services on both sides
   restart <aircraft_ip>   Restart services on both sides
@@ -166,8 +167,11 @@ Web UI:
 ### Examples
 
 ```bash
-# Initial setup
+# Initial setup (installs packages, creates configs on both sides)
 l2bridge setup 100.73.192.107
+
+# Switch to a different aircraft that was previously set up
+l2bridge add 100.64.10.52
 
 # Check status
 l2bridge status
@@ -187,6 +191,12 @@ l2bridge debug 100.73.192.107
 # Install web UI for browser-based control
 l2bridge webui-install
 ```
+
+### Setup vs Add
+
+Use **`setup`** for first-time configuration of a new aircraft. It installs packages, creates all config files, init scripts, and starts services on both routers.
+
+Use **`add`** (or `connect`) to switch to a previously configured aircraft. It skips package installation and config file creation, only exchanging tinc keys, updating kcptun IP addresses, and restarting services. This is significantly faster than a full setup.
 
 ## Configuration
 
@@ -304,21 +314,24 @@ http://<router-tailscale-ip>:8081
 |---------|-------------|
 | **Status Dashboard** | Real-time GCS and aircraft status with service indicators |
 | **Connection Monitor** | Connection state, duration timer, health status |
-| **Bridge Controls** | Start, Stop, Restart, Setup, and Debug buttons |
-| **Aircraft Profiles** | Save multiple aircraft with user-defined names |
+| **Network Statistics** | Live upload/download rates, packets/sec, and cumulative totals |
+| **Tailscale Link Mode** | Shows whether the Tailscale connection is direct peer-to-peer or relayed through DERP |
+| **Bridge Controls** | Start, Stop, Restart, Setup, Connect, and Debug buttons |
+| **Aircraft Profiles** | Save multiple aircraft with names and optional SSH passwords |
 | **Profile Switching** | Switch between aircraft from dropdown selector |
 | **Live Logs** | Real-time streaming of l2bridge, tinc, and kcptun logs |
 
 ### Aircraft Profile Management
 
-The web UI allows saving aircraft Tailscale IPs with friendly names:
+The web UI allows saving aircraft Tailscale IPs with friendly names and optional SSH passwords:
 
 1. Click **Manage** next to the aircraft selector
 2. Enter a Profile ID (e.g., `alpha`), Display Name (e.g., `Aircraft Alpha`), and Tailscale IP
-3. Click **Add Aircraft**
-4. Select the aircraft from the dropdown to make it active
+3. Optionally enter the aircraft's SSH password for automated first-time setup
+4. Click **Add Aircraft**
+5. Select the aircraft from the dropdown to make it active
 
-Profiles are stored in `/etc/l2bridge/aircraft.json` and persist across reboots.
+Stored SSH passwords are used automatically during setup so that SSH key installation doesn't require manual password entry. Passwords can be cleared from profiles at any time via the lock icon. Profiles are stored in `/etc/l2bridge/aircraft.json` and persist across reboots.
 
 ### Switching Aircraft
 
@@ -326,9 +339,26 @@ To connect to a different aircraft:
 
 1. Select the aircraft from the dropdown in the header
 2. The l2bridge configuration is automatically updated
-3. Use **Setup** or **Start** to establish the connection
+3. Use **Connect** to switch to a previously set up aircraft, or **Setup** for first-time configuration
 
-This replaces running `l2bridge setup <new-ip>` from the command line.
+**Connect** exchanges keys and updates IP addresses without reinstalling packages — equivalent to `l2bridge add <ip>` on the command line.
+
+### Network Statistics
+
+The dashboard displays live network statistics for the l2bridge interface:
+
+- **Upload/Download rates** — real-time bytes per second
+- **Packets per second** — inbound and outbound
+- **Total transferred** — cumulative bytes and packet counts
+- **Errors and drops** — transmission errors and dropped packets
+
+### Tailscale Link Status
+
+The Aircraft Status card shows the Tailscale connection mode:
+
+- **Direct** — peer-to-peer WireGuard connection (lowest latency)
+- **Relay** — traffic routed through a DERP relay server (higher latency, shown with relay name)
+- **Idle** — no active traffic between peers
 
 ### Removing the Web UI
 
