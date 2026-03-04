@@ -140,8 +140,8 @@ Add to `/etc/rc.local` for persistence.
 l2bridge <command> [options]
 
 Setup & Control:
-  setup <aircraft_ip>     Full setup of both GCS and Aircraft
-  add <aircraft_ip>       Connect to an already-setup aircraft (no reinstall)
+  setup <ip> <name>       Full setup of both GCS and Aircraft
+  add <ip> [name]         Connect to an already-setup aircraft (no reinstall)
   start <aircraft_ip>     Start services on both sides
   stop [aircraft_ip]      Stop services on both sides
   restart <aircraft_ip>   Restart services on both sides
@@ -168,10 +168,10 @@ Web UI:
 
 ```bash
 # Initial setup (installs packages, creates configs on both sides)
-l2bridge setup 100.73.192.107
+l2bridge setup 100.73.192.107 "Aircraft Alpha"
 
 # Switch to a different aircraft that was previously set up
-l2bridge add 100.64.10.52
+l2bridge add 100.64.10.52 "Aircraft Bravo"
 
 # Check status
 l2bridge status

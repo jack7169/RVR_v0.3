@@ -93,6 +93,7 @@ parse_json() {
 run_l2bridge_command() {
     local cmd="$1"
     local aircraft_ip="$2"
+    local aircraft_name="$3"
     local start_time=$(date +%s)
 
     acquire_lock
@@ -100,7 +101,10 @@ run_l2bridge_command() {
     local output
     local exit_code
 
-    if [ -n "$aircraft_ip" ]; then
+    if [ -n "$aircraft_name" ]; then
+        output=$("$L2BRIDGE" "$cmd" "$aircraft_ip" "$aircraft_name" 2>&1)
+        exit_code=$?
+    elif [ -n "$aircraft_ip" ]; then
         output=$("$L2BRIDGE" "$cmd" "$aircraft_ip" 2>&1)
         exit_code=$?
     else
@@ -439,6 +443,7 @@ main() {
     local post_data=$(read_post_data)
     local action=""
     local aircraft_ip=""
+    local aircraft_name=""
 
     # Parse action from POST data or query string
     if [ -n "$post_data" ]; then
@@ -446,10 +451,12 @@ main() {
         if command -v jsonfilter >/dev/null 2>&1; then
             action=$(echo "$post_data" | jsonfilter -e '@.action' 2>/dev/null)
             aircraft_ip=$(echo "$post_data" | jsonfilter -e '@.aircraft_ip' 2>/dev/null)
+            aircraft_name=$(echo "$post_data" | jsonfilter -e '@.aircraft_name' 2>/dev/null)
         fi
         # Fallback to simple parsing
         [ -z "$action" ] && action=$(parse_json "action" "$post_data")
         [ -z "$aircraft_ip" ] && aircraft_ip=$(parse_json "aircraft_ip" "$post_data")
+        [ -z "$aircraft_name" ] && aircraft_name=$(parse_json "aircraft_name" "$post_data")
     fi
 
     # Handle GET requests
@@ -461,7 +468,10 @@ main() {
 
     case "$action" in
         # L2Bridge commands
-        start|stop|restart|setup|add|debug)
+        setup|add)
+            run_l2bridge_command "$action" "$aircraft_ip" "$aircraft_name"
+            ;;
+        start|stop|restart|debug)
             run_l2bridge_command "$action" "$aircraft_ip"
             ;;
         status)

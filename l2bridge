@@ -68,8 +68,8 @@ Kuruka RVR L2 Bridge Tool v2.1
 Usage: l2bridge <command> [options]
 
 Commands:
-  setup <aircraft_ip>     Full setup/reconfigure both GCS and Aircraft
-  add <aircraft_ip>       Connect to an already-setup aircraft (no reinstall)
+  setup <ip> <name>       Full setup/reconfigure both GCS and Aircraft
+  add <ip> [name]         Connect to an already-setup aircraft (no reinstall)
   start <aircraft_ip>     Start services on both sides
   stop [aircraft_ip]      Stop services on both sides
   restart <aircraft_ip>   Restart services on both sides
@@ -161,6 +161,103 @@ require_aircraft_ip() {
 
 save_aircraft_ip() {
     echo "AIRCRAFT_IP=\"$1\"" > "$STATE_FILE"
+}
+
+# Save or update aircraft profile in aircraft.json and set as active
+# Usage: save_aircraft_profile <name> <ip>
+save_aircraft_profile() {
+    local name="$1"
+    local ip="$2"
+    local aircraft_file="/etc/l2bridge/aircraft.json"
+
+    mkdir -p /etc/l2bridge
+
+    # Generate profile ID from name (lowercase, replace spaces/special chars with dash)
+    local id=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/--*/-/g; s/^-//; s/-$//')
+    [ -z "$id" ] && id="aircraft-$(echo "$ip" | tr '.' '-')"
+
+    local created=$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
+
+    # Initialize file if it doesn't exist
+    if [ ! -f "$aircraft_file" ]; then
+        printf '{\n  "version": 1,\n  "active": "",\n  "profiles": {}\n}\n' > "$aircraft_file"
+    fi
+
+    # Extract existing profiles
+    local tmp_profiles=$(mktemp)
+    awk '
+    /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
+        pid = $0
+        sub(/^[^"]*"/, "", pid)
+        sub(/".*/, "", pid)
+        if (pid != "profiles") {
+            current_id = pid
+            p_pass[current_id] = ""
+        }
+    }
+    current_id && /"name":/ {
+        val = $0; sub(/.*"name":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_name[current_id] = val
+    }
+    current_id && /"tailscale_ip":/ {
+        val = $0; sub(/.*"tailscale_ip":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_ip[current_id] = val
+    }
+    current_id && /"ssh_password":/ {
+        val = $0; sub(/.*"ssh_password":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_pass[current_id] = val
+    }
+    current_id && /"created":/ {
+        val = $0; sub(/.*"created":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_created[current_id] = val
+    }
+    current_id && /"last_used":/ {
+        val = $0; sub(/.*"last_used":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_last[current_id] = val
+        print current_id "|" p_name[current_id] "|" p_ip[current_id] "|" p_pass[current_id] "|" p_created[current_id] "|" p_last[current_id]
+    }
+    ' "$aircraft_file" > "$tmp_profiles"
+
+    # Check if profile with this ID or IP already exists
+    local found=0
+    local tmp_updated=$(mktemp)
+    while IFS='|' read -r pid pname pip ppass pcreated plast; do
+        [ -z "$pid" ] && continue
+        if [ "$pid" = "$id" ] || [ "$pip" = "$ip" ]; then
+            # Update existing profile - keep password and created time
+            echo "$id|$name|$ip|$ppass|$pcreated|$created"
+            found=1
+        else
+            echo "$pid|$pname|$pip|$ppass|$pcreated|$plast"
+        fi
+    done < "$tmp_profiles" > "$tmp_updated"
+
+    # Add new profile if not found
+    if [ "$found" = "0" ]; then
+        echo "$id|$name|$ip||$created|$created" >> "$tmp_updated"
+    fi
+
+    # Rebuild JSON file
+    printf '{\n  "version": 1,\n  "active": "%s",\n  "profiles": {\n' "$id" > "$aircraft_file"
+
+    local first=1
+    while IFS='|' read -r pid pname pip ppass pcreated plast; do
+        [ -z "$pid" ] && continue
+        [ $first -eq 0 ] && printf ',\n' >> "$aircraft_file"
+        printf '    "%s": {\n' "$pid" >> "$aircraft_file"
+        printf '      "name": "%s",\n' "$pname" >> "$aircraft_file"
+        printf '      "tailscale_ip": "%s",\n' "$pip" >> "$aircraft_file"
+        printf '      "ssh_password": "%s",\n' "$ppass" >> "$aircraft_file"
+        printf '      "created": "%s",\n' "$pcreated" >> "$aircraft_file"
+        printf '      "last_used": "%s"\n' "$plast" >> "$aircraft_file"
+        printf '    }' >> "$aircraft_file"
+        first=0
+    done < "$tmp_updated"
+
+    printf '\n  }\n}\n' >> "$aircraft_file"
+    rm -f "$tmp_profiles" "$tmp_updated"
+
+    echo "[*] Aircraft profile '$name' ($id) saved and set active."
 }
 
 check_aircraft_reachable() {
@@ -485,7 +582,12 @@ cmd_watchdog_remove() {
 # SETUP COMMAND
 #############################################
 cmd_setup() {
-    local AIRCRAFT_IP=$(require_aircraft_ip "$1")
+    local AIRCRAFT_IP="$1"
+    local AIRCRAFT_NAME="$2"
+
+    [ -z "$AIRCRAFT_IP" ] && { echo "ERROR: Usage: l2bridge setup <aircraft_ip> <aircraft_name>"; exit 1; }
+    [ -z "$AIRCRAFT_NAME" ] && { echo "ERROR: Aircraft name required. Usage: l2bridge setup <aircraft_ip> <aircraft_name>"; exit 1; }
+
     local GCS_IP=$(get_local_tailscale_ip)
 
     # Initialize setup log
@@ -495,7 +597,7 @@ cmd_setup() {
     echo "  Kuruka RVR L2 Bridge Setup v2.2"
     echo "========================================="
     echo "  GCS:      $GCS_IP"
-    echo "  Aircraft: $AIRCRAFT_IP"
+    echo "  Aircraft: $AIRCRAFT_IP ($AIRCRAFT_NAME)"
     echo "========================================="
     echo ""
 
@@ -819,6 +921,7 @@ HOSTKEY"
     echo "    Keys exchanged."
 
     save_aircraft_ip "$AIRCRAFT_IP"
+    save_aircraft_profile "$AIRCRAFT_NAME" "$AIRCRAFT_IP"
 
     echo "[*] Installing watchdog..."
     cmd_watchdog_install
@@ -828,7 +931,7 @@ HOSTKEY"
 
     echo "[*] Waiting for STP convergence (45s)..."
     sleep 45
-    
+
     # Post-start verification
     echo ""
     echo "[*] Post-start verification..."
@@ -1113,19 +1216,16 @@ cmd_webui_remove() {
 # ADD (CONNECT TO EXISTING AIRCRAFT)
 #############################################
 cmd_add() {
-    local AIRCRAFT_IP=$(require_aircraft_ip "$1")
+    local AIRCRAFT_IP="$1"
+    local AIRCRAFT_NAME="$2"
+
+    [ -z "$AIRCRAFT_IP" ] && { echo "ERROR: Usage: l2bridge add <aircraft_ip> [aircraft_name]"; exit 1; }
+
     local GCS_IP=$(get_local_tailscale_ip)
 
-    echo "========================================="
-    echo "  L2 Bridge - Connect to Aircraft"
-    echo "========================================="
-    echo "  GCS:      $GCS_IP"
-    echo "  Aircraft: $AIRCRAFT_IP"
-    echo "========================================="
-    echo ""
-
-    # Get password from aircraft profile if available
+    # Look up existing profile by IP for password and name
     local aircraft_password=""
+    local existing_name=""
     if [ -f "/etc/l2bridge/aircraft.json" ]; then
         aircraft_password=$(awk -v ip="$AIRCRAFT_IP" '
             BEGIN { in_profile=0; current_ip=""; current_pass="" }
@@ -1146,7 +1246,45 @@ cmd_add() {
                 in_profile = 0
             }
         ' /etc/l2bridge/aircraft.json 2>/dev/null)
+
+        existing_name=$(awk -v ip="$AIRCRAFT_IP" '
+            BEGIN { in_profile=0; current_ip=""; current_name="" }
+            /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ { in_profile=1; current_ip=""; current_name="" }
+            in_profile && /"tailscale_ip":/ {
+                gsub(/.*"tailscale_ip":[[:space:]]*"/, ""); gsub(/".*/, "")
+                current_ip = $0
+            }
+            in_profile && /"name":/ {
+                gsub(/.*"name":[[:space:]]*"/, ""); gsub(/".*/, "")
+                current_name = $0
+            }
+            /\}/ {
+                if (in_profile && current_ip == ip && current_name != "") {
+                    print current_name
+                    exit
+                }
+                in_profile = 0
+            }
+        ' /etc/l2bridge/aircraft.json 2>/dev/null)
     fi
+
+    # Use existing name if no name provided, require name if no existing profile
+    if [ -z "$AIRCRAFT_NAME" ]; then
+        if [ -n "$existing_name" ]; then
+            AIRCRAFT_NAME="$existing_name"
+        else
+            echo "ERROR: Aircraft name required for new aircraft. Usage: l2bridge add <aircraft_ip> <aircraft_name>"
+            exit 1
+        fi
+    fi
+
+    echo "========================================="
+    echo "  L2 Bridge - Connect to Aircraft"
+    echo "========================================="
+    echo "  GCS:      $GCS_IP"
+    echo "  Aircraft: $AIRCRAFT_IP ($AIRCRAFT_NAME)"
+    echo "========================================="
+    echo ""
 
     echo "[*] Testing connectivity..."
     check_aircraft_reachable "$AIRCRAFT_IP" || { echo "ERROR: Cannot reach aircraft at $AIRCRAFT_IP"; exit 1; }
@@ -1194,8 +1332,9 @@ HOSTKEY"
     " 2>/dev/null
     echo "    Configuration updated."
 
-    # Save aircraft IP
+    # Save aircraft IP and profile
     save_aircraft_ip "$AIRCRAFT_IP"
+    save_aircraft_profile "$AIRCRAFT_NAME" "$AIRCRAFT_IP"
 
     # Start services
     echo "[*] Starting services..."
@@ -1207,7 +1346,7 @@ HOSTKEY"
     echo ""
     cmd_status
     echo ""
-    echo "Aircraft $AIRCRAFT_IP connected."
+    echo "Aircraft '$AIRCRAFT_NAME' ($AIRCRAFT_IP) connected."
 }
 
 #############################################

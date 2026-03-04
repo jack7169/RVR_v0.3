@@ -1388,16 +1388,21 @@
 
             const activeId = document.getElementById('aircraft-select').value;
             let aircraftIp = null;
+            let aircraftName = null;
 
-            // Get IP from state if we have profiles loaded
+            // Get IP and name from state if we have profiles loaded
             if (activeId && state.aircraft.length > 0) {
                 const profile = state.aircraft.find(a => a.id === activeId);
-                if (profile) aircraftIp = profile.tailscale_ip;
+                if (profile) {
+                    aircraftIp = profile.tailscale_ip;
+                    aircraftName = profile.name;
+                }
             }
 
             // Fallback to status data
             if (!aircraftIp && state.status?.aircraft?.tailscale_ip) {
                 aircraftIp = state.status.aircraft.tailscale_ip;
+                aircraftName = state.status.aircraft.profile_name;
             }
 
             if (['start', 'stop', 'restart', 'setup', 'add', 'debug'].includes(action) && !aircraftIp) {
@@ -1408,13 +1413,14 @@
             }
 
             try {
+                const payload = { action: action, aircraft_ip: aircraftIp };
+                if (['setup', 'add'].includes(action) && aircraftName) {
+                    payload.aircraft_name = aircraftName;
+                }
                 const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        action: action,
-                        aircraft_ip: aircraftIp
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const result = await response.json();
