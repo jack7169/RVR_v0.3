@@ -996,6 +996,9 @@
                 <button class="btn btn-primary" data-action="setup" onclick="executeCommand('setup')">
                     Setup
                 </button>
+                <button class="btn btn-primary" data-action="add" onclick="executeCommand('add')" style="opacity: 0.85;">
+                    Connect
+                </button>
                 <button class="btn btn-secondary" data-action="debug" onclick="executeCommand('debug')">
                     Debug
                 </button>
@@ -1396,7 +1399,7 @@
                 aircraftIp = state.status.aircraft.tailscale_ip;
             }
 
-            if (['start', 'stop', 'restart', 'setup', 'debug'].includes(action) && !aircraftIp) {
+            if (['start', 'stop', 'restart', 'setup', 'add', 'debug'].includes(action) && !aircraftIp) {
                 showToast('Please select an aircraft first', 'error');
                 btn.disabled = false;
                 btn.textContent = originalText;

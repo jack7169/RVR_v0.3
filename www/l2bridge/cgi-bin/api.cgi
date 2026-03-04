@@ -461,7 +461,7 @@ main() {
 
     case "$action" in
         # L2Bridge commands
-        start|stop|restart|setup|debug)
+        start|stop|restart|setup|add|debug)
             run_l2bridge_command "$action" "$aircraft_ip"
             ;;
         status)

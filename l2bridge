@@ -69,6 +69,7 @@ Usage: l2bridge <command> [options]
 
 Commands:
   setup <aircraft_ip>     Full setup/reconfigure both GCS and Aircraft
+  add <aircraft_ip>       Connect to an already-setup aircraft (no reinstall)
   start <aircraft_ip>     Start services on both sides
   stop [aircraft_ip]      Stop services on both sides
   restart <aircraft_ip>   Restart services on both sides
@@ -1110,12 +1111,114 @@ cmd_webui_remove() {
 }
 
 #############################################
+# ADD (CONNECT TO EXISTING AIRCRAFT)
+#############################################
+cmd_add() {
+    local AIRCRAFT_IP=$(require_aircraft_ip "$1")
+    local GCS_IP=$(get_local_tailscale_ip)
+
+    echo "========================================="
+    echo "  L2 Bridge - Connect to Aircraft"
+    echo "========================================="
+    echo "  GCS:      $GCS_IP"
+    echo "  Aircraft: $AIRCRAFT_IP"
+    echo "========================================="
+    echo ""
+
+    # Get password from aircraft profile if available
+    local aircraft_password=""
+    if [ -f "/etc/l2bridge/aircraft.json" ]; then
+        aircraft_password=$(awk -v ip="$AIRCRAFT_IP" '
+            BEGIN { in_profile=0; current_ip=""; current_pass="" }
+            /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ { in_profile=1; current_ip=""; current_pass="" }
+            in_profile && /"tailscale_ip":/ {
+                gsub(/.*"tailscale_ip":[[:space:]]*"/, ""); gsub(/".*/, "")
+                current_ip = $0
+            }
+            in_profile && /"ssh_password":/ {
+                gsub(/.*"ssh_password":[[:space:]]*"/, ""); gsub(/".*/, "")
+                current_pass = $0
+            }
+            /\}/ {
+                if (in_profile && current_ip == ip && current_pass != "") {
+                    print current_pass
+                    exit
+                }
+                in_profile = 0
+            }
+        ' /etc/l2bridge/aircraft.json 2>/dev/null)
+    fi
+
+    echo "[*] Testing connectivity..."
+    check_aircraft_reachable "$AIRCRAFT_IP" || { echo "ERROR: Cannot reach aircraft at $AIRCRAFT_IP"; exit 1; }
+    echo "    Aircraft reachable."
+
+    # Setup SSH keys
+    setup_ssh_keys "$AIRCRAFT_IP" "$aircraft_password" || exit 1
+
+    # Verify l2bridge is installed on both sides
+    echo "[*] Verifying l2bridge installation..."
+    if [ ! -f /etc/tinc/$NETWORK_NAME/tinc.conf ]; then
+        echo "ERROR: L2bridge not set up on GCS. Run 'l2bridge setup $AIRCRAFT_IP' first."
+        exit 1
+    fi
+    ssh_aircraft "$AIRCRAFT_IP" "[ -f /etc/tinc/$NETWORK_NAME/tinc.conf ]" 2>/dev/null || {
+        echo "ERROR: L2bridge not set up on aircraft. Run 'l2bridge setup $AIRCRAFT_IP' first."
+        exit 1
+    }
+    echo "    Both sides have l2bridge installed."
+
+    # Stop existing services
+    echo "[*] Stopping existing services..."
+    cmd_stop_internal "$(get_aircraft_ip)" 2>/dev/null || true
+
+    # Re-exchange tinc keys
+    echo "[*] Exchanging tinc keys..."
+    GCS_KEY=$(cat /etc/tinc/$NETWORK_NAME/hosts/ground)
+    AIRCRAFT_KEY=$(ssh_aircraft "$AIRCRAFT_IP" "cat /etc/tinc/$NETWORK_NAME/hosts/aircraft")
+    echo "$AIRCRAFT_KEY" > /etc/tinc/$NETWORK_NAME/hosts/aircraft
+    ssh_aircraft "$AIRCRAFT_IP" "cat > /etc/tinc/$NETWORK_NAME/hosts/ground << 'HOSTKEY'
+Address = 127.0.0.1
+Port = $KCPTUN_LOCAL_PORT
+
+$GCS_KEY
+HOSTKEY"
+    echo "    Keys exchanged."
+
+    # Update kcptun configs with current GCS IP
+    echo "[*] Updating kcptun configuration..."
+    if [ -f /etc/kcptun/server.json ]; then
+        sed -i "s|\"listen\": \"[^\"]*:|\"listen\": \"$GCS_IP:|g" /etc/kcptun/server.json
+    fi
+    ssh_aircraft "$AIRCRAFT_IP" "
+        [ -f /etc/kcptun/client.json ] && sed -i 's|\"remoteaddr\": \"[^\"]*:|\"remoteaddr\": \"$GCS_IP:|g' /etc/kcptun/client.json
+    " 2>/dev/null
+    echo "    Configuration updated."
+
+    # Save aircraft IP
+    save_aircraft_ip "$AIRCRAFT_IP"
+
+    # Start services
+    echo "[*] Starting services..."
+    cmd_start_internal "$AIRCRAFT_IP"
+
+    echo "[*] Waiting for STP convergence (45s)..."
+    sleep 45
+
+    echo ""
+    cmd_status
+    echo ""
+    echo "Aircraft $AIRCRAFT_IP connected."
+}
+
+#############################################
 # MAIN
 #############################################
 CMD="$1"; shift 2>/dev/null || true
 
 case "$CMD" in
     setup) cmd_setup "$@" ;;
+    add|connect) cmd_add "$@" ;;
     start) cmd_start "$@" ;;
     stop) cmd_stop "$@" ;;
     restart) cmd_restart "$@" ;;
