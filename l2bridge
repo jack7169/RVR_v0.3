@@ -278,20 +278,28 @@ ensure_ssh_key() {
 ssh_key_works() {
     local ip="$1"
     [ -f "$SSH_KEY" ] || return 1
-    # Background dbclient with key-only auth
-    # If key works: completes quickly, returns 0
-    # If key fails: dbclient prompts on /dev/tty, blocks, gets killed after timeout
-    dbclient -i "$SSH_KEY" -y root@"$ip" "exit" </dev/null >/dev/null 2>&1 &
+    # Test key-only auth: run command expecting known output
+    # Use a temp script to completely detach from controlling tty
+    # so dbclient cannot prompt for password via /dev/tty
+    local tmp_out="/tmp/l2bridge-keytest.$$"
+    rm -f "$tmp_out"
+    ( exec </dev/null >/dev/null 2>&1
+      # Close all inherited fds and detach from tty
+      exec 0</dev/null 1>"$tmp_out" 2>/dev/null
+      dbclient -i "$SSH_KEY" -y root@"$ip" "echo keyauth_ok" 2>/dev/null
+    ) &
     local pid=$!
-    # 10s timeout for satellite latency on SSH handshake
     local i=0
-    while [ $i -lt 10 ]; do
-        kill -0 $pid 2>/dev/null || { wait $pid; return $?; }
+    while [ $i -lt 15 ]; do
+        kill -0 $pid 2>/dev/null || break
         sleep 1
         i=$((i + 1))
     done
-    kill $pid 2>/dev/null; wait $pid 2>/dev/null
-    return 1
+    kill $pid 2>/dev/null
+    wait $pid 2>/dev/null
+    local result=$(cat "$tmp_out" 2>/dev/null)
+    rm -f "$tmp_out"
+    [ "$result" = "keyauth_ok" ]
 }
 
 setup_ssh_keys() {
