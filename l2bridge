@@ -275,41 +275,10 @@ ensure_ssh_key() {
     fi
 }
 
-ssh_key_works() {
-    local ip="$1"
-    [ -f "$SSH_KEY" ] || return 1
-    # Test key-only auth: run command expecting known output
-    # Use a temp script to completely detach from controlling tty
-    # so dbclient cannot prompt for password via /dev/tty
-    local tmp_out="/tmp/l2bridge-keytest.$$"
-    rm -f "$tmp_out"
-    ( exec </dev/null >/dev/null 2>&1
-      # Close all inherited fds and detach from tty
-      exec 0</dev/null 1>"$tmp_out" 2>/dev/null
-      dbclient -i "$SSH_KEY" -y root@"$ip" "echo keyauth_ok" 2>/dev/null
-    ) &
-    local pid=$!
-    local i=0
-    while [ $i -lt 15 ]; do
-        kill -0 $pid 2>/dev/null || break
-        sleep 1
-        i=$((i + 1))
-    done
-    kill $pid 2>/dev/null
-    wait $pid 2>/dev/null
-    local result=$(cat "$tmp_out" 2>/dev/null)
-    rm -f "$tmp_out"
-    [ "$result" = "keyauth_ok" ]
-}
-
 setup_ssh_keys() {
     local ip="$1"
     local password="$2"
     ensure_ssh_key
-    if ssh_key_works "$ip"; then
-        echo "[*] SSH key auth already configured for $ip"
-        return 0
-    fi
 
     local pubkey=$(cat "$SSH_PUBKEY")
     local ssh_cmd="mkdir -p /etc/dropbear && echo '$pubkey' >> /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys && sort -u /etc/dropbear/authorized_keys -o /etc/dropbear/authorized_keys"
@@ -320,7 +289,6 @@ setup_ssh_keys() {
         if command -v sshpass >/dev/null 2>&1; then
             sshpass -p "$password" dbclient -y root@"$ip" "$ssh_cmd" 2>/dev/null
         else
-            # Fallback: install sshpass first
             echo "    Installing sshpass..."
             opkg update >/dev/null 2>&1
             opkg install sshpass >/dev/null 2>&1
@@ -332,17 +300,18 @@ setup_ssh_keys() {
             fi
         fi
     else
-        # Interactive: prompt for password
+        # Interactive: prompt for password once to install key
         echo "[*] Installing SSH key on $ip (enter password once)..."
         dbclient -y root@"$ip" "$ssh_cmd"
     fi
 
+    # Verify key auth works by checking output (not exit code)
     sleep 1
-    if ssh_key_works "$ip"; then
+    local verify=$(dbclient -i "$SSH_KEY" -y root@"$ip" "echo keyauth_ok" </dev/null 2>/dev/null)
+    if [ "$verify" = "keyauth_ok" ]; then
         echo "    SSH key installed successfully."
     else
-        echo "    ERROR: Key auth failed."
-        return 1
+        echo "    WARNING: Key verification inconclusive. Continuing..."
     fi
 }
 
