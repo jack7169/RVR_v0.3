@@ -1277,6 +1277,7 @@ cmd_update() {
             cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
             chmod +x "$WEBUI_ROOT/cgi-bin/"*.cgi
             echo "$new_hash" > "$WEBUI_CONFIG_DIR/version"
+            rm -f /tmp/l2bridge-latest-version
             log_info "Web UI updated"
         fi
     fi
