@@ -277,14 +277,14 @@ ensure_ssh_key() {
 ssh_key_works() {
     local ip="$1"
     [ -f "$SSH_KEY" ] || return 1
-    # setsid detaches from controlling terminal so dbclient cannot open
-    # /dev/tty for password prompts - it will fail immediately if key auth
-    # doesn't work instead of prompting the user
-    ( setsid dbclient -i "$SSH_KEY" -y root@"$ip" "exit" </dev/null >/dev/null 2>&1 ) &
+    # Background dbclient with key-only auth
+    # If key works: completes quickly, returns 0
+    # If key fails: dbclient prompts on /dev/tty, blocks, gets killed after timeout
+    dbclient -i "$SSH_KEY" -y root@"$ip" "exit" </dev/null >/dev/null 2>&1 &
     local pid=$!
-    # 5s timeout accounts for satellite latency on SSH handshake
+    # 10s timeout for satellite latency on SSH handshake
     local i=0
-    while [ $i -lt 5 ]; do
+    while [ $i -lt 10 ]; do
         kill -0 $pid 2>/dev/null || { wait $pid; return $?; }
         sleep 1
         i=$((i + 1))
