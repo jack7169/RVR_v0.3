@@ -233,6 +233,34 @@ fi
 # Get current timestamp in milliseconds for rate calculation
 STATS_TIMESTAMP=$(date +%s%3N 2>/dev/null || echo $(($(date +%s) * 1000)))
 
+# Version tracking
+VERSION_CURRENT=$(cat /etc/l2bridge/version 2>/dev/null || echo "unknown")
+VERSION_LATEST=""
+VERSION_UPDATE="false"
+REPO_PATH=$(cat /etc/l2bridge/repo 2>/dev/null || echo "")
+
+if [ -n "$REPO_PATH" ] && [ "$VERSION_CURRENT" != "unknown" ]; then
+    CACHE_FILE="/tmp/l2bridge-latest-version"
+    CACHE_AGE=600  # 10 minutes
+    # Use cached value if fresh enough
+    if [ -f "$CACHE_FILE" ]; then
+        FILE_AGE=$(( $(date +%s) - $(date -r "$CACHE_FILE" +%s 2>/dev/null || echo 0) ))
+        if [ "$FILE_AGE" -lt "$CACHE_AGE" ]; then
+            VERSION_LATEST=$(cat "$CACHE_FILE" 2>/dev/null || echo "")
+        fi
+    fi
+    # Fetch from GitHub if cache miss
+    if [ -z "$VERSION_LATEST" ]; then
+        VERSION_LATEST=$(wget -q -O- "https://api.github.com/repos/$REPO_PATH/commits/main" 2>/dev/null | awk -F'"' '/"sha"/ {print substr($4,1,7); exit}')
+        if [ -n "$VERSION_LATEST" ]; then
+            echo "$VERSION_LATEST" > "$CACHE_FILE"
+        fi
+    fi
+    if [ -n "$VERSION_LATEST" ] && [ "$VERSION_LATEST" != "$VERSION_CURRENT" ]; then
+        VERSION_UPDATE="true"
+    fi
+fi
+
 # Output JSON response
 cat << EOF
 {
@@ -299,6 +327,11 @@ cat << EOF
       "rx_packets": $TS_RX_PACKETS,
       "tx_packets": $TS_TX_PACKETS
     }
+  },
+  "version": {
+    "current": "$VERSION_CURRENT",
+    "latest": "$VERSION_LATEST",
+    "update_available": $VERSION_UPDATE
   }
 }
 EOF

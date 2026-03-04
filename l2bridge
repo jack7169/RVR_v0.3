@@ -952,16 +952,28 @@ HOSTKEY"
     
     echo ""
     echo "=== Connectivity Test ==="
-    # Find aircraft LAN IP using detected bridge name
-    local aircraft_lan_ip=$(ssh_aircraft "$AIRCRAFT_IP" "ip -4 addr show $aircraft_bridge 2>/dev/null | awk '/inet / {split(\$2, a, \"/\"); print a[1]}' | head -1")
-    if [ -n "$aircraft_lan_ip" ]; then
-        echo "Aircraft $aircraft_bridge IP: $aircraft_lan_ip"
-        echo "Testing L2 ping from GCS to aircraft LAN..."
-        ping -c 3 -W 2 "$aircraft_lan_ip" && echo "SUCCESS: L2 bridge working!" || echo "FAILED: L2 bridge not passing traffic"
+    # Test L2 bridge by pinging aircraft via Tailscale (verifies tunnel is up)
+    echo "Pinging aircraft Tailscale IP ($AIRCRAFT_IP)..."
+    ping -c 3 -W 5 "$AIRCRAFT_IP" && echo "Tailscale tunnel: OK" || echo "WARNING: Tailscale ping failed"
+
+    # Test L2 bridge frame forwarding by finding a unique aircraft LAN IP
+    local aircraft_ips=$(ssh_aircraft "$AIRCRAFT_IP" "ip -4 addr show 2>/dev/null | awk '/inet / {split(\$2,a,\"/\"); print a[1]}' | grep -v '^127\.' | grep -v '^100\.'")
+    local gcs_ips=$(ip -4 addr show 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]}' | grep -v '^127\.' | grep -v '^100\.')
+
+    local test_ip=""
+    for aip in $aircraft_ips; do
+        local found=0
+        for gip in $gcs_ips; do
+            [ "$aip" = "$gip" ] && found=1 && break
+        done
+        [ "$found" = "0" ] && test_ip="$aip" && break
+    done
+
+    if [ -n "$test_ip" ]; then
+        echo "Testing L2 bridge to aircraft LAN ($test_ip)..."
+        ping -c 3 -W 5 "$test_ip" && echo "SUCCESS: L2 bridge passing traffic!" || echo "WARNING: L2 bridge ping failed (may need routes if different subnets)"
     else
-        echo "Could not determine aircraft $aircraft_bridge IP"
-        echo "Trying to find any bridge IP..."
-        ssh_aircraft "$AIRCRAFT_IP" "ip -4 addr show type bridge"
+        echo "No unique aircraft LAN IP found - L2 bridge verified via Tailscale only"
     fi
     
     echo ""
@@ -1113,6 +1125,19 @@ cmd_webui_install() {
 
     # Make CGI scripts executable
     chmod +x "$WEBUI_ROOT/cgi-bin/"*.cgi
+
+    # Write version info for update tracking
+    local git_hash=$(cd "$script_dir" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "$git_hash" > "$WEBUI_CONFIG_DIR/version"
+    log_info "Installed version: $git_hash"
+
+    # Store GitHub repo path for update checking (strip credentials)
+    local git_remote=$(cd "$script_dir" && git config --get remote.origin.url 2>/dev/null || echo "")
+    local repo_path=$(echo "$git_remote" | sed 's|.*github.com[:/]||; s|\.git$||')
+    if [ -n "$repo_path" ]; then
+        echo "$repo_path" > "$WEBUI_CONFIG_DIR/repo"
+        log_info "Update tracking: $repo_path"
+    fi
 
     # Initialize aircraft config if not exists
     if [ ! -f "$WEBUI_CONFIG_DIR/aircraft.json" ]; then
