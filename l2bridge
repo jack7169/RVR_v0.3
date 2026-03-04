@@ -86,6 +86,7 @@ Commands:
 
   webui-install           Install web-based control panel on port 8081
   webui-remove            Remove web UI
+  update                  Pull latest version from GitHub
 
 EOF
 }
@@ -1231,6 +1232,60 @@ cmd_webui_remove() {
 }
 
 #############################################
+# UPDATE (PULL LATEST FROM GITHUB)
+#############################################
+cmd_update() {
+    # Find the git repo directory (where this script lives)
+    local script_path=$(readlink -f "$0")
+    local repo_dir=$(dirname "$script_path")
+
+    # Check if it's a git repo
+    if [ ! -d "$repo_dir/.git" ]; then
+        log_error "Not a git repository: $repo_dir"
+        log_info "Update is only available when installed via git clone"
+        exit 1
+    fi
+
+    echo "Updating L2Bridge from GitHub..."
+    echo "  Repository: $repo_dir"
+
+    local old_hash=$(cd "$repo_dir" && git rev-parse --short HEAD 2>/dev/null)
+    echo "  Current version: $old_hash"
+
+    # Fetch and reset to origin (preserves nothing in repo dir - configs are in /etc/)
+    cd "$repo_dir"
+    git fetch origin main 2>&1 || { log_error "Failed to fetch updates"; exit 1; }
+
+    local new_hash=$(git rev-parse --short origin/main 2>/dev/null)
+    if [ "$old_hash" = "$new_hash" ]; then
+        echo "  Already up to date ($old_hash)"
+        return 0
+    fi
+
+    git reset --hard origin/main 2>&1 || { log_error "Failed to apply updates"; exit 1; }
+    chmod +x "$repo_dir/l2bridge"
+    chmod +x "$repo_dir/www/l2bridge/cgi-bin/"*.cgi 2>/dev/null
+
+    echo "  Updated: $old_hash -> $new_hash"
+
+    # Refresh web UI files if installed
+    if [ -d "$WEBUI_ROOT" ]; then
+        log_info "Updating web UI files..."
+        local src_www="$repo_dir/www/l2bridge"
+        if [ -d "$src_www" ]; then
+            cp "$src_www/index.html" "$WEBUI_ROOT/"
+            cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
+            chmod +x "$WEBUI_ROOT/cgi-bin/"*.cgi
+            echo "$new_hash" > "$WEBUI_CONFIG_DIR/version"
+            log_info "Web UI updated"
+        fi
+    fi
+
+    echo ""
+    echo "Update complete."
+}
+
+#############################################
 # ADD (CONNECT TO EXISTING AIRCRAFT)
 #############################################
 cmd_add() {
@@ -1388,6 +1443,7 @@ case "$CMD" in
     watchdog-remove) cmd_watchdog_remove ;;
     webui-install) cmd_webui_install ;;
     webui-remove) cmd_webui_remove ;;
+    update) cmd_update ;;
     uninstall|remove) cmd_uninstall "$@" ;;
     help|-h|--help) print_usage ;;
     "") print_usage; exit 1 ;;
