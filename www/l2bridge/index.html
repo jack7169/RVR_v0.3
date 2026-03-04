@@ -1226,19 +1226,20 @@
             const ts = stats.tailscale;
             const now = stats.timestamp_ms;
 
-            // Calculate rates if we have previous stats
+            // Use Tailscale interface stats for rates and totals
+            // (l2bridge is bridged to br-lan and sees all LAN traffic)
             if (state.prevStats && state.prevStats.timestamp_ms) {
                 const timeDelta = (now - state.prevStats.timestamp_ms) / 1000; // seconds
                 if (timeDelta > 0 && timeDelta < 30) { // Sanity check
-                    const prevL2b = state.prevStats.l2bridge;
+                    const prevTs = state.prevStats.tailscale;
 
-                    // Calculate byte rates
-                    const rxRate = (l2b.rx_bytes - prevL2b.rx_bytes) / timeDelta;
-                    const txRate = (l2b.tx_bytes - prevL2b.tx_bytes) / timeDelta;
+                    // Calculate byte rates from Tailscale interface
+                    const rxRate = (ts.rx_bytes - prevTs.rx_bytes) / timeDelta;
+                    const txRate = (ts.tx_bytes - prevTs.tx_bytes) / timeDelta;
 
-                    // Calculate packet rates
-                    const rxPktRate = (l2b.rx_packets - prevL2b.rx_packets) / timeDelta;
-                    const txPktRate = (l2b.tx_packets - prevL2b.tx_packets) / timeDelta;
+                    // Calculate packet rates from Tailscale interface
+                    const rxPktRate = (ts.rx_packets - prevTs.rx_packets) / timeDelta;
+                    const txPktRate = (ts.tx_packets - prevTs.tx_packets) / timeDelta;
                     const totalPktRate = rxPktRate + txPktRate;
 
                     // Update rate displays
@@ -1248,20 +1249,20 @@
                 }
             }
 
-            // Update totals (always)
-            setText('stat-rx-total', 'Total: ' + formatBytes(l2b.rx_bytes));
-            setText('stat-tx-total', 'Total: ' + formatBytes(l2b.tx_bytes));
-            setText('stat-pkt-total', 'Total: ' + formatPackets(l2b.rx_packets + l2b.tx_packets));
+            // Update totals from Tailscale interface
+            setText('stat-rx-total', 'Total: ' + formatBytes(ts.rx_bytes));
+            setText('stat-tx-total', 'Total: ' + formatBytes(ts.tx_bytes));
+            setText('stat-pkt-total', 'Total: ' + formatPackets(ts.rx_packets + ts.tx_packets));
 
-            // Update errors
+            // Update errors from l2bridge (tunnel interface)
             const totalErrors = l2b.rx_errors + l2b.tx_errors;
             const totalDropped = l2b.rx_dropped + l2b.tx_dropped;
             setText('stat-errors', formatPackets(totalErrors));
             setText('stat-dropped', 'Dropped: ' + formatPackets(totalDropped));
 
             // Update details
-            setText('stat-rx-packets', formatPackets(l2b.rx_packets));
-            setText('stat-tx-packets', formatPackets(l2b.tx_packets));
+            setText('stat-rx-packets', formatPackets(ts.rx_packets));
+            setText('stat-tx-packets', formatPackets(ts.tx_packets));
             setText('stat-multicast', formatPackets(l2b.multicast));
             setText('stat-ts-total', formatBytes(ts.rx_bytes + ts.tx_bytes));
 

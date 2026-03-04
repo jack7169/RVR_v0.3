@@ -449,16 +449,9 @@ LOG="/tmp/l2bridge-watchdog.log"
 echo $$ > "$LOCK"
 trap "rm -f $LOCK" EXIT
 
-check_repair() {
-    tailscale status >/dev/null 2>&1 || return 0
-    
-    if ! pgrep -f kcptun-server >/dev/null 2>&1 || ! pgrep tincd >/dev/null 2>&1 || ! ip link show l2bridge >/dev/null 2>&1; then
-        echo "$(date): Repairing..." >> "$LOG"
-        /usr/bin/l2bridge monitor >> "$LOG" 2>&1
-    fi
-}
+# Always run health check (updates /tmp/l2bridge.health and repairs if needed)
+/usr/bin/l2bridge monitor >> "$LOG" 2>&1
 
-check_repair
 [ -f "$LOG" ] && tail -100 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 WATCHDOG
     chmod +x /etc/l2bridge-watchdog.sh
