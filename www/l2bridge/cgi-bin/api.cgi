@@ -160,36 +160,34 @@ add_aircraft() {
     local tmp_profiles=$(mktemp)
     awk '
     /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
-        gsub(/.*"/, "")
-        gsub(/".*/, "")
-        current_id = $0
-        profiles[current_id]["password"] = ""
+        id = $0
+        sub(/^[^"]*"/, "", id)
+        sub(/".*/, "", id)
+        if (id != "profiles") {
+            current_id = id
+            p_pass[current_id] = ""
+        }
     }
-    /"name":/ {
-        gsub(/.*"name":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["name"] = $0
+    current_id && /"name":/ {
+        val = $0; sub(/.*"name":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_name[current_id] = val
     }
-    /"tailscale_ip":/ {
-        gsub(/.*"tailscale_ip":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["ip"] = $0
+    current_id && /"tailscale_ip":/ {
+        val = $0; sub(/.*"tailscale_ip":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_ip[current_id] = val
     }
-    /"ssh_password":/ {
-        gsub(/.*"ssh_password":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["password"] = $0
+    current_id && /"ssh_password":/ {
+        val = $0; sub(/.*"ssh_password":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_pass[current_id] = val
     }
-    /"created":/ {
-        gsub(/.*"created":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["created"] = $0
+    current_id && /"created":/ {
+        val = $0; sub(/.*"created":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_created[current_id] = val
     }
-    /"last_used":/ {
-        gsub(/.*"last_used":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["last_used"] = $0
-        print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["password"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
+    current_id && /"last_used":/ {
+        val = $0; sub(/.*"last_used":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_last[current_id] = val
+        print current_id "|" p_name[current_id] "|" p_ip[current_id] "|" p_pass[current_id] "|" p_created[current_id] "|" p_last[current_id]
     }
     ' "$AIRCRAFT_FILE" > "$tmp_profiles"
 
@@ -232,34 +230,87 @@ update_aircraft() {
     init_aircraft_file
 
     # Check if profile exists
-    if ! grep -q "\"$id\"" "$AIRCRAFT_FILE"; then
+    if ! grep -q "\"$id\":" "$AIRCRAFT_FILE"; then
         json_error "Profile not found"
     fi
 
     [ -n "$ip" ] && { validate_ip "$ip" || json_error "Invalid Tailscale IP format"; }
 
-    # Update using sed (simple field replacement)
-    local tmp_file=$(mktemp)
-    cp "$AIRCRAFT_FILE" "$tmp_file"
+    # Extract all profiles, modify the target, rebuild
+    local current_active=""
+    current_active=$(sed -n 's/.*"active":[[:space:]]*"\([^"]*\)".*/\1/p' "$AIRCRAFT_FILE" | head -1)
 
-    if [ -n "$name" ]; then
-        sed -i "s/\"name\": \"[^\"]*\"/\"name\": \"$name\"/" "$tmp_file"
-    fi
+    local tmp_profiles=$(mktemp)
+    awk '
+    /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
+        pid = $0
+        sub(/^[^"]*"/, "", pid)
+        sub(/".*/, "", pid)
+        if (pid != "profiles") {
+            current_id = pid
+            p_pass[current_id] = ""
+        }
+    }
+    current_id && /"name":/ {
+        val = $0; sub(/.*"name":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_name[current_id] = val
+    }
+    current_id && /"tailscale_ip":/ {
+        val = $0; sub(/.*"tailscale_ip":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_ip[current_id] = val
+    }
+    current_id && /"ssh_password":/ {
+        val = $0; sub(/.*"ssh_password":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_pass[current_id] = val
+    }
+    current_id && /"created":/ {
+        val = $0; sub(/.*"created":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_created[current_id] = val
+    }
+    current_id && /"last_used":/ {
+        val = $0; sub(/.*"last_used":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_last[current_id] = val
+        print current_id "|" p_name[current_id] "|" p_ip[current_id] "|" p_pass[current_id] "|" p_created[current_id] "|" p_last[current_id]
+    }
+    ' "$AIRCRAFT_FILE" > "$tmp_profiles"
 
-    if [ -n "$ip" ]; then
-        sed -i "s/\"tailscale_ip\": \"[^\"]*\"/\"tailscale_ip\": \"$ip\"/" "$tmp_file"
-    fi
-
-    # Password update: use special marker __CLEAR__ to clear password
-    if [ -n "$password" ]; then
-        if [ "$password" = "__CLEAR__" ]; then
-            sed -i "s/\"ssh_password\": \"[^\"]*\"/\"ssh_password\": \"\"/" "$tmp_file"
-        else
-            sed -i "s/\"ssh_password\": \"[^\"]*\"/\"ssh_password\": \"$password\"/" "$tmp_file"
+    # Apply updates to the target profile in the extracted data
+    local tmp_updated=$(mktemp)
+    while IFS='|' read -r pid pname pip ppass pcreated plast; do
+        [ -z "$pid" ] && continue
+        if [ "$pid" = "$id" ]; then
+            [ -n "$name" ] && pname="$name"
+            [ -n "$ip" ] && pip="$ip"
+            if [ -n "$password" ]; then
+                if [ "$password" = "__CLEAR__" ]; then
+                    ppass=""
+                else
+                    ppass="$password"
+                fi
+            fi
         fi
-    fi
+        echo "$pid|$pname|$pip|$ppass|$pcreated|$plast"
+    done < "$tmp_profiles" > "$tmp_updated"
 
-    mv "$tmp_file" "$AIRCRAFT_FILE"
+    # Rebuild JSON file
+    printf '{\n  "version": 1,\n  "active": "%s",\n  "profiles": {\n' "$current_active" > "$AIRCRAFT_FILE"
+
+    local first=1
+    while IFS='|' read -r pid pname pip ppass pcreated plast; do
+        [ -z "$pid" ] && continue
+        [ $first -eq 0 ] && printf ',\n' >> "$AIRCRAFT_FILE"
+        printf '    "%s": {\n' "$pid" >> "$AIRCRAFT_FILE"
+        printf '      "name": "%s",\n' "$pname" >> "$AIRCRAFT_FILE"
+        printf '      "tailscale_ip": "%s",\n' "$pip" >> "$AIRCRAFT_FILE"
+        printf '      "ssh_password": "%s",\n' "$ppass" >> "$AIRCRAFT_FILE"
+        printf '      "created": "%s",\n' "$pcreated" >> "$AIRCRAFT_FILE"
+        printf '      "last_used": "%s"\n' "$plast" >> "$AIRCRAFT_FILE"
+        printf '    }' >> "$AIRCRAFT_FILE"
+        first=0
+    done < "$tmp_updated"
+
+    printf '\n  }\n}\n' >> "$AIRCRAFT_FILE"
+    rm -f "$tmp_profiles" "$tmp_updated"
 
     json_response "{\"success\": true, \"message\": \"Aircraft profile updated\"}"
 }
@@ -287,37 +338,35 @@ delete_aircraft() {
     local tmp_profiles=$(mktemp)
     awk -v delete_id="$id" '
     /"[a-zA-Z0-9_-]+":[[:space:]]*\{/ {
-        gsub(/.*"/, "")
-        gsub(/".*/, "")
-        current_id = $0
-        profiles[current_id]["password"] = ""
+        id = $0
+        sub(/^[^"]*"/, "", id)
+        sub(/".*/, "", id)
+        if (id != "profiles") {
+            current_id = id
+            p_pass[current_id] = ""
+        }
     }
-    /"name":/ {
-        gsub(/.*"name":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["name"] = $0
+    current_id && /"name":/ {
+        val = $0; sub(/.*"name":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_name[current_id] = val
     }
-    /"tailscale_ip":/ {
-        gsub(/.*"tailscale_ip":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["ip"] = $0
+    current_id && /"tailscale_ip":/ {
+        val = $0; sub(/.*"tailscale_ip":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_ip[current_id] = val
     }
-    /"ssh_password":/ {
-        gsub(/.*"ssh_password":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["password"] = $0
+    current_id && /"ssh_password":/ {
+        val = $0; sub(/.*"ssh_password":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_pass[current_id] = val
     }
-    /"created":/ {
-        gsub(/.*"created":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["created"] = $0
+    current_id && /"created":/ {
+        val = $0; sub(/.*"created":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_created[current_id] = val
     }
-    /"last_used":/ {
-        gsub(/.*"last_used":[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        profiles[current_id]["last_used"] = $0
+    current_id && /"last_used":/ {
+        val = $0; sub(/.*"last_used":[[:space:]]*"/, "", val); sub(/".*/, "", val)
+        p_last[current_id] = val
         if (current_id != delete_id) {
-            print current_id "|" profiles[current_id]["name"] "|" profiles[current_id]["ip"] "|" profiles[current_id]["password"] "|" profiles[current_id]["created"] "|" profiles[current_id]["last_used"]
+            print current_id "|" p_name[current_id] "|" p_ip[current_id] "|" p_pass[current_id] "|" p_created[current_id] "|" p_last[current_id]
         }
     }
     ' "$AIRCRAFT_FILE" > "$tmp_profiles"
