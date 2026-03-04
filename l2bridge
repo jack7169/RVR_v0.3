@@ -956,24 +956,17 @@ HOSTKEY"
     echo "Pinging aircraft Tailscale IP ($AIRCRAFT_IP)..."
     ping -c 3 -W 5 "$AIRCRAFT_IP" && echo "Tailscale tunnel: OK" || echo "WARNING: Tailscale ping failed"
 
-    # Test L2 bridge frame forwarding by finding a unique aircraft LAN IP
-    local aircraft_ips=$(ssh_aircraft "$AIRCRAFT_IP" "ip -4 addr show 2>/dev/null | awk '/inet / {split(\$2,a,\"/\"); print a[1]}' | grep -v '^127\.' | grep -v '^100\.'")
-    local gcs_ips=$(ip -4 addr show 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]}' | grep -v '^127\.' | grep -v '^100\.')
+    # Test L2 bridge frame forwarding using aircraft's bridge IP
+    local aircraft_lan_ip=$(ssh_aircraft "$AIRCRAFT_IP" "ip -4 addr show $aircraft_bridge 2>/dev/null | awk '/inet / {split(\$2,a,\"/\"); print a[1]}' | head -1")
+    local gcs_lan_ip=$(ip -4 addr show $gcs_bridge 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]}' | head -1)
 
-    local test_ip=""
-    for aip in $aircraft_ips; do
-        local found=0
-        for gip in $gcs_ips; do
-            [ "$aip" = "$gip" ] && found=1 && break
-        done
-        [ "$found" = "0" ] && test_ip="$aip" && break
-    done
-
-    if [ -n "$test_ip" ]; then
-        echo "Testing L2 bridge to aircraft LAN ($test_ip)..."
-        ping -c 3 -W 5 "$test_ip" && echo "SUCCESS: L2 bridge passing traffic!" || echo "WARNING: L2 bridge ping failed (may need routes if different subnets)"
+    if [ -n "$aircraft_lan_ip" ] && [ "$aircraft_lan_ip" != "$gcs_lan_ip" ]; then
+        echo "Testing L2 bridge to aircraft LAN ($aircraft_lan_ip via $aircraft_bridge)..."
+        ping -c 3 -W 5 "$aircraft_lan_ip" && echo "SUCCESS: L2 bridge passing traffic!" || echo "WARNING: L2 bridge ping failed (may need routes if different subnets)"
+    elif [ -n "$aircraft_lan_ip" ]; then
+        echo "Aircraft and GCS share same bridge IP ($aircraft_lan_ip) - L2 bridge verified via Tailscale only"
     else
-        echo "No unique aircraft LAN IP found - L2 bridge verified via Tailscale only"
+        echo "Could not determine aircraft LAN IP - L2 bridge verified via Tailscale only"
     fi
     
     echo ""
