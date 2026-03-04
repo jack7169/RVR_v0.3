@@ -249,15 +249,30 @@ if [ -n "$REPO_PATH" ] && [ "$VERSION_CURRENT" != "unknown" ]; then
             VERSION_LATEST=$(cat "$CACHE_FILE" 2>/dev/null || echo "")
         fi
     fi
-    # Fetch from GitHub if cache miss
+    # Fetch from GitHub if cache miss (with 3s timeout to avoid blocking CGI)
     if [ -z "$VERSION_LATEST" ]; then
-        VERSION_LATEST=$(wget -q -O- "https://api.github.com/repos/$REPO_PATH/commits/main" 2>/dev/null | awk -F'"' '/"sha"/ {print substr($4,1,7); exit}')
+        VERSION_LATEST=$(wget -q -T 3 -O- "https://api.github.com/repos/$REPO_PATH/commits/main" 2>/dev/null | awk -F'"' '/"sha"/ {print substr($4,1,7); exit}')
         if [ -n "$VERSION_LATEST" ]; then
             echo "$VERSION_LATEST" > "$CACHE_FILE"
         fi
     fi
+    # Only show update if latest differs from current AND version file is older than cache
+    # This prevents false positives when we just updated (version file is newer than cache)
     if [ -n "$VERSION_LATEST" ] && [ "$VERSION_LATEST" != "$VERSION_CURRENT" ]; then
-        VERSION_UPDATE="true"
+        VERSION_FILE="/etc/l2bridge/version"
+        if [ -f "$CACHE_FILE" ] && [ -f "$VERSION_FILE" ]; then
+            CACHE_MTIME=$(date -r "$CACHE_FILE" +%s 2>/dev/null || echo 0)
+            VERSION_MTIME=$(date -r "$VERSION_FILE" +%s 2>/dev/null || echo 0)
+            # If version file is newer than cache, we just updated — stale cache
+            if [ "$VERSION_MTIME" -gt "$CACHE_MTIME" ]; then
+                rm -f "$CACHE_FILE"
+                VERSION_LATEST="$VERSION_CURRENT"
+            else
+                VERSION_UPDATE="true"
+            fi
+        else
+            VERSION_UPDATE="true"
+        fi
     fi
 fi
 
