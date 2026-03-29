@@ -209,20 +209,39 @@ ensure_packages_local() {
 # then falls back to opkg feeds.
 ensure_packages_remote() {
     local ip="$1"
-    ssh_aircraft "$ip" '
-        need_install=""
-        command -v tinc >/dev/null 2>&1 || need_install=1
-        command -v kcptun-client >/dev/null 2>&1 || need_install=1
-        [ -z "$need_install" ] && { echo "    Packages already installed."; exit 0; }
 
-        # Try bundled .ipk files if repo exists on aircraft
-        pkg_dir="/root/RVR_v0.3/packages"
-        if [ -d "$pkg_dir/common" ]; then
-            opkg install "$pkg_dir/common/"*.ipk "$pkg_dir/aircraft/"*.ipk \
+    # Check if packages already installed
+    local need=$(ssh_aircraft "$ip" '
+        command -v tinc >/dev/null 2>&1 && command -v kcptun-client >/dev/null 2>&1 && echo "ok"
+    ' 2>/dev/null)
+    if [ "$need" = "ok" ]; then
+        echo "    Packages already installed."
+        return 0
+    fi
+
+    # Find local package directory (on GCS)
+    local script_dir=$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")
+    local pkg_dir=""
+    for d in "$script_dir/packages" "/root/RVR_v0.3/packages"; do
+        [ -d "$d/common" ] && { pkg_dir="$d"; break; }
+    done
+
+    if [ -n "$pkg_dir" ]; then
+        echo "    Copying packages to aircraft..."
+        ssh_aircraft "$ip" "mkdir -p /tmp/rvr-packages" 2>/dev/null
+        scp -i "$SSH_KEY" -O -o StrictHostKeyChecking=no -r \
+            "$pkg_dir/common" "$pkg_dir/aircraft" \
+            root@"$ip":/tmp/rvr-packages/ 2>/dev/null
+
+        ssh_aircraft "$ip" '
+            opkg install /tmp/rvr-packages/common/*.ipk /tmp/rvr-packages/aircraft/*.ipk \
                 --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
-        fi
+            rm -rf /tmp/rvr-packages
+        ' 2>/dev/null
+    fi
 
-        # Check again
+    # Check what's still missing, fall back to opkg feeds
+    ssh_aircraft "$ip" '
         missing=""
         command -v tinc >/dev/null 2>&1 || missing="tinc $missing"
         command -v kcptun-client >/dev/null 2>&1 || missing="kcptun-client $missing"
