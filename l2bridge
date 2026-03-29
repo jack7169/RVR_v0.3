@@ -228,16 +228,16 @@ ensure_packages_remote() {
 
     if [ -n "$pkg_dir" ]; then
         echo "    Copying packages to aircraft..."
-        ssh_aircraft "$ip" "mkdir -p /tmp/rvr-packages" 2>/dev/null
-        scp -i "$SSH_KEY" -O -o StrictHostKeyChecking=no -r \
-            "$pkg_dir/common" "$pkg_dir/aircraft" \
-            root@"$ip":/tmp/rvr-packages/ 2>/dev/null
+        tar -cf - -C "$pkg_dir" common aircraft | \
+            ssh_aircraft "$ip" "rm -rf /tmp/rvr-packages; mkdir -p /tmp/rvr-packages; tar -xf - -C /tmp/rvr-packages"
 
         ssh_aircraft "$ip" '
-            opkg install /tmp/rvr-packages/common/*.ipk /tmp/rvr-packages/aircraft/*.ipk \
-                --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+            if ls /tmp/rvr-packages/common/*.ipk >/dev/null 2>&1; then
+                opkg install /tmp/rvr-packages/common/*.ipk /tmp/rvr-packages/aircraft/*.ipk \
+                    --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+            fi
             rm -rf /tmp/rvr-packages
-        ' 2>/dev/null
+        '
     fi
 
     # Check what's still missing, fall back to opkg feeds
