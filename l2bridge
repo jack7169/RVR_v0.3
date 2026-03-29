@@ -1613,12 +1613,23 @@ cmd_update() {
         local src_www="$repo_dir/www"
         if [ -d "$src_www" ]; then
             cp "$src_www/index.html" "$WEBUI_ROOT/"
+            if [ -d "$src_www/assets" ]; then
+                mkdir -p "$WEBUI_ROOT/assets"
+                cp -r "$src_www/assets/"* "$WEBUI_ROOT/assets/"
+            fi
             cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
             chmod +x "$WEBUI_ROOT/cgi-bin/"*.cgi
             echo "$new_hash" > "$WEBUI_CONFIG_DIR/version"
             rm -f /tmp/l2bridge-latest-version
             log_info "Web UI updated"
         fi
+    fi
+
+    # Restart bridge to apply config changes (regenerates tinc-up/down scripts)
+    local AIRCRAFT_IP=$(get_aircraft_ip 2>/dev/null)
+    if [ -n "$AIRCRAFT_IP" ] && pgrep tincd >/dev/null 2>&1; then
+        log_info "Restarting bridge to apply updates..."
+        cmd_restart "$AIRCRAFT_IP"
     fi
 
     echo ""
