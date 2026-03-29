@@ -81,7 +81,7 @@ function FileRow({ file, onDelete }: { file: FileInfo; onDelete?: (name: string)
       <div className="flex gap-1 ml-2">
         <a
           href={getDownloadUrl(file.name)}
-          download
+          download={file.name}
           className="text-xs text-accent hover:text-accent-hover px-2 py-1 rounded hover:bg-accent/10 transition-colors"
         >
           Download
