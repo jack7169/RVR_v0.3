@@ -248,30 +248,38 @@ ensure_packages_remote() {
 #############################################
 print_usage() {
     cat << 'EOF'
-Kuruka RVR L2 Bridge Tool v2.1
+Kuruka RVR L2 Bridge Tool v3.0
 
 Usage: l2bridge <command> [options]
 
+  Aircraft can be specified by Tailscale IP, profile name, or profile ID.
+
 Commands:
   setup <ip> <name>       Full setup/reconfigure both GCS and Aircraft
-  add <ip> [name]         Connect to an already-setup aircraft (no reinstall)
-  start <aircraft_ip>     Start services on both sides
-  stop [aircraft_ip]      Stop services on both sides
-  restart <aircraft_ip>   Restart services on both sides
+  add <ip|name> [name]    Connect to an already-setup aircraft (no reinstall)
+  start <ip|name>         Start services on both sides
+  stop [ip|name]          Stop services on both sides
+  restart <ip|name>       Restart services on both sides
   status                  Show local bridge status
-  remote <aircraft_ip>    Show remote aircraft status via SSH
+  remote <ip|name>        Show remote aircraft status via SSH
   logs [lines]            Show recent logs (default: 20 lines)
-  debug <aircraft_ip>     Run full diagnostics on both sides
+  debug <ip|name>         Run full diagnostics on both sides
   config                  Show current configuration
-  uninstall [aircraft_ip] Remove all configuration from both sides
-  
+
+  capture [duration]      Capture bridge traffic to pcap (default: 60s)
+  capture stop            Stop an active capture
+  capture status          Show capture status and file info
+
+  remove-aircraft <ip|name>  Uninstall bridge from aircraft, keep GCS intact
+  uninstall [ip|name]     Remove all configuration from both sides
+
   monitor [--daemon]      Health check and auto-repair
   watchdog-install        Install cron-based watchdog for auto-recovery
   watchdog-remove         Remove watchdog cron job
 
   webui-install           Install web-based control panel on port 8081
   webui-remove            Remove web UI
-  update                  Pull latest version from GitHub
+  update                  Pull latest, update web UI, restart bridge
 
 EOF
 }
@@ -327,9 +335,40 @@ is_tailscale_ready() {
     tailscale status >/dev/null 2>&1 && [ -n "$(get_tailscale_ip_nowait)" ]
 }
 
+resolve_aircraft() {
+    local input="$1"
+    [ -z "$input" ] && return
+    # If it looks like a Tailscale IP, return as-is
+    echo "$input" | grep -qE '^100\.' && { echo "$input"; return; }
+    # Try to match profile name or ID from aircraft.json
+    local aircraft_file="/etc/l2bridge/aircraft.json"
+    [ -f "$aircraft_file" ] || return
+    # Match by profile ID first
+    local ip=$(awk -v id="$input" '
+        /"'"$input"'"[[:space:]]*:/ { found=1 }
+        found && /"tailscale_ip"/ { gsub(/.*"tailscale_ip"[[:space:]]*:[[:space:]]*"/, ""); gsub(/".*/, ""); print; exit }
+    ' "$aircraft_file")
+    if [ -n "$ip" ]; then echo "$ip"; return; fi
+    # Match by display name (case-insensitive)
+    ip=$(awk -v name="$input" '
+        BEGIN { IGNORECASE=1 }
+        /"name"[[:space:]]*:/ {
+            n=$0; gsub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", n); gsub(/".*/, "", n)
+            if (tolower(n) == tolower(name)) found=1
+        }
+        found && /"tailscale_ip"/ { gsub(/.*"tailscale_ip"[[:space:]]*:[[:space:]]*"/, ""); gsub(/".*/, ""); print; exit }
+    ' "$aircraft_file")
+    [ -n "$ip" ] && echo "$ip"
+}
+
 get_aircraft_ip() {
     if [ -n "$1" ]; then
-        echo "$1"
+        local resolved=$(resolve_aircraft "$1")
+        if [ -n "$resolved" ]; then
+            echo "$resolved"
+        else
+            echo "$1"
+        fi
     elif [ -f "$STATE_FILE" ]; then
         . "$STATE_FILE"
         echo "${AIRCRAFT_IP:-}"
@@ -1275,6 +1314,87 @@ cmd_config() {
     [ -f "$STATE_FILE" ] && { . "$STATE_FILE"; echo "Aircraft:    $AIRCRAFT_IP"; }
 }
 
+cmd_remove_aircraft() {
+    local input="$1"
+    [ -z "$input" ] && { echo "Usage: l2bridge remove-aircraft <name|ip>"; exit 1; }
+    local AIRCRAFT_IP=$(get_aircraft_ip "$input")
+    [ -z "$AIRCRAFT_IP" ] && { echo "ERROR: Could not resolve '$input' to an aircraft IP"; exit 1; }
+
+    echo ""
+    echo "This will remove the L2 bridge from aircraft $AIRCRAFT_IP"
+    echo "and delete its profile. GCS will remain intact."
+    echo ""
+    printf "Continue? [y/N] "
+    read confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "Aborted."; exit 0; }
+
+    echo ""
+
+    # 1. Stop bridge services
+    echo "[*] Stopping bridge services..."
+    stop_local_services
+    stop_aircraft_services "$AIRCRAFT_IP" 2>/dev/null || true
+
+    # 2. Clean up aircraft (if reachable)
+    if check_aircraft_reachable "$AIRCRAFT_IP" 2>/dev/null; then
+        echo "[*] Uninstalling from aircraft ($AIRCRAFT_IP)..."
+        ssh_aircraft "$AIRCRAFT_IP" '
+            /etc/init.d/kcptun-client stop 2>/dev/null || true
+            /etc/init.d/tinc-l2bridge stop 2>/dev/null || true
+            if [ -x "/etc/tinc/l2bridge/tinc-down" ]; then
+                INTERFACE="l2bridge" /etc/tinc/l2bridge/tinc-down 2>/dev/null || true
+            fi
+            /etc/init.d/kcptun-client disable 2>/dev/null || true
+            /etc/init.d/tinc-l2bridge disable 2>/dev/null || true
+            rm -f /etc/init.d/kcptun-client /etc/init.d/tinc-l2bridge
+            rm -rf /etc/tinc/l2bridge
+            rm -f /etc/kcptun/client.json
+            rmdir /etc/kcptun 2>/dev/null || true
+            uci delete network.@device[0].stp 2>/dev/null || true
+            uci commit network 2>/dev/null || true
+            opkg remove --force-depends tinc kcptun-client kcptun-config kmod-tun 2>/dev/null || true
+            rm -f /tmp/l2bridge*
+        ' 2>/dev/null || log_warn "Aircraft cleanup failed (may need manual cleanup)"
+    else
+        echo "[!] Aircraft $AIRCRAFT_IP unreachable - skipping remote cleanup"
+        echo "    Run manually on aircraft: l2bridge uninstall (or SSH and remove configs)"
+    fi
+
+    # 3. Remove GCS tinc host key for this aircraft
+    rm -f "/etc/tinc/$NETWORK_NAME/hosts/aircraft"
+
+    # 4. Remove profile from aircraft.json
+    local aircraft_file="/etc/l2bridge/aircraft.json"
+    if [ -f "$aircraft_file" ]; then
+        # Find and remove the profile matching this IP
+        local profile_id=$(awk -v ip="$AIRCRAFT_IP" '
+            /"[a-zA-Z0-9_-]+"[[:space:]]*:[[:space:]]*\{/ {
+                id=$0; sub(/^[^"]*"/, "", id); sub(/".*/, "", id)
+                if (id != "profiles") current_id=id
+            }
+            current_id && /"tailscale_ip"/ && index($0, ip) {
+                print current_id; exit
+            }
+        ' "$aircraft_file")
+        if [ -n "$profile_id" ]; then
+            echo "[*] Removing profile '$profile_id' from aircraft.json..."
+            # Clear active if it matches
+            local active=$(sed -n 's/.*"active"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$aircraft_file" | head -1)
+            [ "$active" = "$profile_id" ] && sed -i "s/\"active\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"active\": \"\"/" "$aircraft_file"
+        fi
+    fi
+
+    # 5. Clear state file if it points to this aircraft
+    if [ -f "$STATE_FILE" ]; then
+        . "$STATE_FILE"
+        [ "${AIRCRAFT_IP:-}" = "$AIRCRAFT_IP" ] && rm -f "$STATE_FILE"
+    fi
+
+    echo ""
+    echo "Aircraft $AIRCRAFT_IP removed. GCS is still operational."
+    echo "Use 'l2bridge add <ip>' to connect a different aircraft."
+}
+
 cmd_uninstall() {
     local AIRCRAFT_IP=$(get_aircraft_ip "$1")
     local script_dir=$(dirname "$(readlink -f "$0")")
@@ -1899,7 +2019,8 @@ case "$CMD" in
     webui-remove) cmd_webui_remove ;;
     capture|cap) cmd_capture "$@" ;;
     update) cmd_update ;;
-    uninstall|remove) cmd_uninstall "$@" ;;
+    remove-aircraft) cmd_remove_aircraft "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
     help|-h|--help) print_usage ;;
     "") print_usage; exit 1 ;;
     *) echo "Unknown: $CMD"; print_usage; exit 1 ;;
