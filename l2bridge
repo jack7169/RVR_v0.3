@@ -210,12 +210,15 @@ ensure_packages_local() {
 ensure_packages_remote() {
     local ip="$1"
 
-    # Check if packages already installed
-    local need=$(ssh_aircraft "$ip" '
-        command -v tinc >/dev/null 2>&1 && command -v kcptun-client >/dev/null 2>&1 && echo "ok"
-    ' 2>/dev/null)
-    if [ "$need" = "ok" ]; then
-        echo "    Packages already installed."
+    # Check if packages already installed on aircraft
+    local remote_check=$(ssh_aircraft "$ip" '
+        t=0; k=0
+        command -v tinc >/dev/null 2>&1 && t=1
+        command -v kcptun-client >/dev/null 2>&1 && k=1
+        echo "${t}${k}"
+    ' 2>/dev/null | tr -d '[:space:]')
+    if [ "$remote_check" = "11" ]; then
+        echo "    Packages already installed on aircraft."
         return 0
     fi
 
