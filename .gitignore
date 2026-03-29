@@ -1,3 +1,4 @@
 .DS_Store
 www-next/node_modules/
-www-next/dist/.playwright-mcp/
+www-next/dist/
+.playwright-mcp/
