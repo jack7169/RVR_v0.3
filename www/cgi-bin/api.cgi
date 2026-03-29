@@ -504,7 +504,8 @@ main() {
                 [ -f "$f" ] || continue
                 fname=$(basename "$f")
                 fsize=$(wc -c < "$f" 2>/dev/null || echo 0)
-                fdate=$(date -r "$f" -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
+                fdate=$(ls -l --full-time "$f" 2>/dev/null | awk '{print $6"T"$7}' || date '+%Y-%m-%dT%H:%M:%S')
+                [ -z "$fdate" ] && fdate=$(date '+%Y-%m-%dT%H:%M:%S')
                 ftype="log"
                 echo "$fname" | grep -q '\.pcap$' && ftype="capture"
                 [ $first -eq 0 ] && printf ','

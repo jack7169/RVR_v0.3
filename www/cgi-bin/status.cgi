@@ -254,16 +254,20 @@ fi
 # Capture status
 CAPTURE_ACTIVE="false"
 CAPTURE_ELAPSED=0
-CAPTURE_DURATION=0
 CAPTURE_FILE_SIZE=0
 CAPTURE_PID_FILE="/tmp/l2bridge-capture.pid"
+CAPTURE_START_FILE="/tmp/l2bridge-capture.start"
 CAPTURE_FILE="/tmp/l2bridge-capture.pcap"
 if [ -f "$CAPTURE_PID_FILE" ]; then
     CAPTURE_PID=$(cat "$CAPTURE_PID_FILE")
     if kill -0 "$CAPTURE_PID" 2>/dev/null; then
         CAPTURE_ACTIVE="true"
-        CAPTURE_ELAPSED=$(ps -o etimes= -p "$CAPTURE_PID" 2>/dev/null | tr -d ' ')
-        CAPTURE_ELAPSED="${CAPTURE_ELAPSED:-0}"
+        if [ -f "$CAPTURE_START_FILE" ]; then
+            CAPTURE_START=$(cat "$CAPTURE_START_FILE")
+            CAPTURE_ELAPSED=$(( $(date +%s) - CAPTURE_START ))
+        fi
+    else
+        rm -f "$CAPTURE_PID_FILE"
     fi
 fi
 [ -f "$CAPTURE_FILE" ] && CAPTURE_FILE_SIZE=$(wc -c < "$CAPTURE_FILE" 2>/dev/null || echo 0)
