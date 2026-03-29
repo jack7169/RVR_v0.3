@@ -81,7 +81,9 @@ This tool creates a transparent Layer 2 bridge between a Ground Control Station 
 
 ## Installation
 
-### 1. Install Tailscale on Both Routers
+### Prerequisites
+
+Install and authenticate Tailscale on both routers before proceeding:
 
 ```bash
 # On each router
@@ -92,33 +94,56 @@ tailscale up --accept-routes
 
 Verify both routers appear in your Tailscale admin console and can ping each other.
 
-### 2. Install L2 Bridge Tool
+### Quick Install (on the router)
+
+SSH into the router and run:
 
 ```bash
-# Copy to GCS router
-scp l2bridge root@<gcs-router>:/usr/bin/l2bridge
-ssh root@<gcs-router> "chmod +x /usr/bin/l2bridge"
+wget -qO /tmp/rvr-install.sh https://raw.githubusercontent.com/jack7169/RVR_v0.3/main/install.sh && sh /tmp/rvr-install.sh
 ```
 
-### 3. Run Setup
+The installer handles everything:
+- Downloads the repository
+- Installs required packages from bundled `.ipk` files (no `opkg update` needed)
+- Sets up git for future updates via `l2bridge update`
+- Presents an interactive menu to choose GCS or Aircraft role
+
+For non-interactive installation:
 
 ```bash
-# On GCS router - provide aircraft's Tailscale IP
-l2bridge setup <aircraft-tailscale-ip>
+sh /tmp/rvr-install.sh --role gcs        # Ground Control Station
+sh /tmp/rvr-install.sh --role aircraft    # Aircraft
+```
+
+### What the Installer Does
+
+1. Downloads the repo as a tarball from GitHub (no git required initially)
+2. Configures opkg architecture for GL.iNet and standard OpenWrt devices
+3. Installs role-specific packages from bundled `.ipk` files
+4. Bootstraps git from bundled packages and initializes the repo
+5. Creates the `/usr/bin/l2bridge` symlink
+
+### Run Setup
+
+After installation, configure the bridge from the GCS router:
+
+```bash
+# Provide aircraft's Tailscale IP and a name
+l2bridge setup <aircraft-tailscale-ip> <name>
 
 # Example
-l2bridge setup 100.73.192.107
+l2bridge setup 100.73.192.107 "Aircraft Alpha"
 ```
 
 Setup automatically:
-- Installs tinc and kcptun on both routers
+- Installs tinc and kcptun on both routers (skips if already installed)
 - Generates and exchanges encryption keys
 - Configures firewall rules to prevent routing loops
 - Enables STP on bridges
 - Installs watchdog for automatic recovery
 - Starts all services
 
-### 4. Configure Routing (if using different subnets)
+### Configure Routing (if using different subnets)
 
 If GCS and aircraft use different LAN subnets:
 
@@ -145,7 +170,8 @@ Setup & Control:
   start <aircraft_ip>     Start services on both sides
   stop [aircraft_ip]      Stop services on both sides
   restart <aircraft_ip>   Restart services on both sides
-  uninstall [aircraft_ip] Remove all configuration
+  update                  Pull latest version from GitHub
+  uninstall [aircraft_ip] Fully remove all config, packages, and repo
 
 Monitoring:
   status                  Show local bridge status
@@ -188,8 +214,14 @@ l2bridge logs 50
 # Full diagnostics
 l2bridge debug 100.73.192.107
 
+# Update to latest version
+l2bridge update
+
 # Install web UI for browser-based control
 l2bridge webui-install
+
+# Completely remove everything (restores device to pre-install state)
+l2bridge uninstall
 ```
 
 ### Setup vs Add
@@ -368,6 +400,31 @@ l2bridge webui-remove
 
 This removes web files and uhttpd configuration but preserves aircraft profiles.
 
+## Updating
+
+```bash
+l2bridge update
+```
+
+Pulls the latest version from GitHub. Automatically updates the web UI if installed.
+
+## Uninstalling
+
+```bash
+l2bridge uninstall
+```
+
+Completely removes RVR from the device, restoring it to its pre-install state:
+- Stops all services on GCS and aircraft
+- Removes watchdog, init scripts, and auto-start entries
+- Removes Web UI (uhttpd config, firewall rules, web files)
+- Removes tinc and kcptun configuration
+- Removes installed packages (tinc, kcptun, git, sshpass, etc.)
+- Reverts opkg configuration changes
+- Reverts STP bridge settings
+- Cleans up aircraft (if reachable via SSH)
+- Removes the `/usr/bin/l2bridge` symlink and repository
+
 ## Troubleshooting
 
 ### Bridge Connected but No IP Connectivity
@@ -479,8 +536,9 @@ Limited by Starlink uplink (~20-40 Mbps typical). Bridge adds minimal overhead w
 ### GCS Router
 
 ```
-/usr/bin/l2bridge              # Main script
-/etc/l2bridge.conf             # Saved aircraft IP (legacy)
+/root/RVR_v0.3/               # Repository (installed by install.sh)
+/usr/bin/l2bridge              # Symlink -> /root/RVR_v0.3/l2bridge
+/etc/l2bridge.conf             # Saved aircraft IP
 /etc/l2bridge/aircraft.json    # Aircraft profiles (web UI)
 /etc/tinc/l2bridge/            # Tinc configuration
 /etc/kcptun/server.json        # KCPtun config
@@ -492,8 +550,8 @@ Limited by Starlink uplink (~20-40 Mbps typical). Bridge adds minimal overhead w
 /tmp/l2bridge-watchdog.log     # Watchdog log
 
 # Web UI (after webui-install)
-/www/l2bridge/index.html       # Web interface
-/www/l2bridge/cgi-bin/         # API endpoints
+/www/rvr/index.html            # Web interface
+/www/rvr/cgi-bin/              # API endpoints
 ```
 
 ### Aircraft Router

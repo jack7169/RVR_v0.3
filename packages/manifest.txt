@@ -1,0 +1,30 @@
+# RVR Offline Package Bundle
+# Downloaded: 2026-03-20
+# Source router: GL.iNet BE3600 (GL-BE3600)
+# Architecture: aarch64_cortex-a53_neon-vfpv4
+# OpenWrt release: 23.05-SNAPSHOT
+# Kernel: 5.4.213
+# Feed: https://downloads.openwrt.org/releases/23.05.5/packages/aarch64_cortex-a53/packages
+#
+# common/ - shared dependencies (GCS + Aircraft)
+#   tinc_1.1pre18-2         - L2/L3 VPN mesh daemon
+#   kcptun-config_20230207  - KCPtun configuration scripts
+#   kmod-tun_5.4.213-1      - TUN/TAP kernel module (kernel-version specific!)
+#   libopenssl3_3.0.16-1    - OpenSSL library
+#   liblzo2_2.10-4          - LZO compression library
+#   zlib_1.2.13-1           - zlib compression library
+#   git_2.43.2-1            - Git version control
+#   git-http_2.43.2-1       - Git HTTP transport
+#   libcurl4_8.6.0-1        - cURL library (git dependency)
+#   ca-bundle_20241223-1    - CA certificates bundle (git-http dependency)
+#
+# gcs/ - GCS-only packages
+#   kcptun-server_20230207  - KCPtun server (runs on GCS)
+#   sshpass_1.09-1          - Non-interactive SSH password auth
+#
+# aircraft/ - Aircraft-only packages
+#   kcptun-client_20230207  - KCPtun client (runs on aircraft)
+#
+# WARNING: kmod-tun is kernel-version specific. If the target router
+# runs a different kernel version than 5.4.213, kmod-tun may fail to
+# load. Check with: uname -r

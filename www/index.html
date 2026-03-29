@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>L2 Bridge Control Panel</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-card: #1f2940;
+            --text-primary: #e4e4e7;
+            --text-secondary: #a1a1aa;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --border: #374151;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .connection-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--error);
+            animation: pulse 2s infinite;
+        }
+
+        .connection-indicator.connected {
+            background: var(--success);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .aircraft-selector {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .aircraft-selector label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .aircraft-selector select {
+            padding: 0.5rem 1rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            min-width: 180px;
+        }
+
+        .btn-manage {
+            padding: 0.5rem 0.75rem;
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-manage:hover {
+            background: var(--accent);
+            color: white;
+        }
+
+        /* Status Grid */
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-badge.ok, .status-badge.running, .status-badge.up, .status-badge.connected {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--success);
+        }
+
+        .status-badge.error, .status-badge.stopped, .status-badge.down, .status-badge.disconnected {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error);
+        }
+
+        .status-badge.unknown, .status-badge.inactive {
+            background: rgba(161, 161, 170, 0.2);
+            color: var(--text-secondary);
+        }
+
+        .status-badge.recovering {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .status-row:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .status-value {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .status-value.running { color: var(--success); }
+        .status-value.stopped { color: var(--error); }
+        .status-value.up { color: var(--success); }
+        .status-value.down { color: var(--error); }
+        .status-value.unknown { color: var(--text-secondary); }
+        .status-value.direct { color: var(--success); }
+        .status-value.relay { color: var(--warning); }
+        .status-value.idle { color: var(--text-secondary); }
+
+        /* Connection Status Bar */
+        .connection-bar {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .connection-text {
+            font-weight: 600;
+        }
+
+        .connection-text.connected { color: var(--success); }
+        .connection-text.disconnected { color: var(--error); }
+
+        .connection-stats {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        /* Network Statistics Panel */
+        .stats-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .stats-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stats-title {
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .stats-interface {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: var(--bg);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-box {
+            background: var(--bg);
+            border-radius: 6px;
+            padding: 0.75rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+
+        .stat-icon {
+            font-size: 1.25rem;
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+
+        .stat-icon.download {
+            background: rgba(46, 204, 113, 0.15);
+            color: var(--success);
+        }
+
+        .stat-icon.upload {
+            background: rgba(52, 152, 219, 0.15);
+            color: #3498db;
+        }
+
+        .stat-icon.packets {
+            background: rgba(155, 89, 182, 0.15);
+            color: #9b59b6;
+        }
+
+        .stat-icon.errors {
+            background: rgba(231, 76, 60, 0.15);
+            color: var(--error);
+        }
+
+        .stat-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .stat-box .stat-value {
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: 'Monaco', 'Menlo', monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .stat-box .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            margin-top: 0.125rem;
+        }
+
+        .stat-total {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-family: 'Monaco', 'Menlo', monospace;
+            margin-top: 0.25rem;
+        }
+
+        .stats-details {
+            background: var(--bg);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        .stats-row {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            color: var(--text-secondary);
+        }
+
+        .stats-row span:nth-child(even) {
+            font-family: 'Monaco', 'Menlo', monospace;
+            color: var(--text);
+        }
+
+        /* Controls */
+        .controls {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .controls-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .controls-title {
+            font-weight: 600;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.625rem 1.25rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #16a34a;
+        }
+
+        .btn-danger {
+            background: var(--error);
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #dc2626;
+        }
+
+        .btn-warning {
+            background: var(--warning);
+            color: white;
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            background: #d97706;
+        }
+
+        .btn-secondary {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--border);
+        }
+
+        /* Log Viewer */
+        .log-viewer {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-title {
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .log-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .log-status.paused {
+            background: var(--warning);
+        }
+
+        .log-status.disconnected {
+            background: var(--error);
+        }
+
+        .log-controls {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .log-container {
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 0.8125rem;
+            line-height: 1.6;
+            padding: 0.5rem;
+            background: #0d1117;
+        }
+
+        .log-line {
+            padding: 0.125rem 0.5rem;
+            border-radius: 2px;
+        }
+
+        .log-line:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .log-time {
+            color: var(--text-secondary);
+            margin-right: 0.75rem;
+        }
+
+        .log-source {
+            color: var(--accent);
+            margin-right: 0.5rem;
+            font-weight: 500;
+        }
+
+        .log-line.error { color: var(--error); }
+        .log-line.warn { color: var(--warning); }
+        .log-line.info { color: var(--text-primary); }
+        .log-line.debug { color: var(--text-secondary); }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 100%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+            margin: 1rem;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.625rem 0.875rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .aircraft-list {
+            list-style: none;
+        }
+
+        .aircraft-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .aircraft-item:hover {
+            background: var(--bg-secondary);
+        }
+
+        .aircraft-item.active {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .aircraft-info h4 {
+            font-size: 0.9375rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .aircraft-info p {
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+
+        .aircraft-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn-icon {
+            padding: 0.375rem;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-icon:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .btn-icon.delete:hover {
+            border-color: var(--error);
+            color: var(--error);
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        /* Command Output Modal */
+        .command-output {
+            background: #0d1117;
+            border-radius: 6px;
+            padding: 1rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8125rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 300;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .toast {
+            padding: 0.875rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            animation: slideIn 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            max-width: 400px;
+        }
+
+        .toast.success {
+            background: rgba(34, 197, 94, 0.9);
+            color: white;
+        }
+
+        .toast.error {
+            background: rgba(239, 68, 68, 0.9);
+            color: white;
+        }
+
+        .toast.info {
+            background: rgba(59, 130, 246, 0.9);
+            color: white;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .connection-stats {
+                flex-wrap: wrap;
+                gap: 1rem;
+            }
+
+            .btn-group {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <div class="logo">
+                <div class="connection-indicator" id="connection-indicator"></div>
+                <h1>L2 Bridge Control Panel</h1>
+            </div>
+            <div class="aircraft-selector">
+                <label for="aircraft-select">Aircraft:</label>
+                <select id="aircraft-select">
+                    <option value="">-- Select Aircraft --</option>
+                </select>
+                <button class="btn-manage" onclick="showAircraftModal()">Manage</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Status Cards -->
+        <div class="status-grid">
+            <!-- GCS Status -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">GCS Status</span>
+                    <span class="status-badge" id="gcs-health-badge">Unknown</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tailscale IP</span>
+                    <span class="status-value" id="gcs-ts-ip">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tailscale</span>
+                    <span class="status-value" id="gcs-ts-status">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">KCPtun Server</span>
+                    <span class="status-value" id="gcs-kcptun">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tincd</span>
+                    <span class="status-value" id="gcs-tincd">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">L2Bridge Interface</span>
+                    <span class="status-value" id="gcs-iface">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tinc Peers</span>
+                    <span class="status-value" id="gcs-peers">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Watchdog</span>
+                    <span class="status-value" id="gcs-watchdog">--</span>
+                </div>
+            </div>
+
+            <!-- Aircraft Status -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Aircraft Status</span>
+                    <span class="status-badge" id="aircraft-reachable-badge">Unknown</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Profile</span>
+                    <span class="status-value" id="aircraft-name">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tailscale IP</span>
+                    <span class="status-value" id="aircraft-ip">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Reachable</span>
+                    <span class="status-value" id="aircraft-reachable">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tailscale Link</span>
+                    <span class="status-value" id="aircraft-ts-mode">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">KCPtun Client</span>
+                    <span class="status-value" id="aircraft-kcptun">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Tincd</span>
+                    <span class="status-value" id="aircraft-tincd">--</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">L2Bridge Interface</span>
+                    <span class="status-value" id="aircraft-iface">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Network Statistics -->
+        <div class="stats-panel">
+            <div class="stats-header">
+                <span class="stats-title">Network Statistics</span>
+                <span class="stats-interface">l2bridge</span>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-icon download">&#8595;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-rx-rate">0 B/s</div>
+                        <div class="stat-label">Download</div>
+                        <div class="stat-total" id="stat-rx-total">Total: 0 B</div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-icon upload">&#8593;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-tx-rate">0 B/s</div>
+                        <div class="stat-label">Upload</div>
+                        <div class="stat-total" id="stat-tx-total">Total: 0 B</div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-icon packets">&#9641;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-pkt-rate">0 pkt/s</div>
+                        <div class="stat-label">Packets</div>
+                        <div class="stat-total" id="stat-pkt-total">Total: 0</div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-icon errors">&#9888;</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-errors">0</div>
+                        <div class="stat-label">Errors</div>
+                        <div class="stat-total" id="stat-dropped">Dropped: 0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="stats-details">
+                <div class="stats-row">
+                    <span>RX Packets:</span>
+                    <span id="stat-rx-packets">0</span>
+                    <span>TX Packets:</span>
+                    <span id="stat-tx-packets">0</span>
+                </div>
+                <div class="stats-row">
+                    <span>Multicast:</span>
+                    <span id="stat-multicast">0</span>
+                    <span>Tailscale:</span>
+                    <span id="stat-ts-total">0 B</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Status Bar -->
+        <div class="connection-bar">
+            <div class="connection-status">
+                <div class="connection-indicator" id="conn-indicator"></div>
+                <span class="connection-text" id="conn-text">Disconnected</span>
+            </div>
+            <div class="connection-stats">
+                <div class="stat">
+                    <div class="stat-value" id="conn-duration">--:--:--</div>
+                    <div class="stat-label">Duration</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="last-update">--:--:--</div>
+                    <div class="stat-label">Last Update</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="controls-header">
+                <span class="controls-title">Bridge Controls</span>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-success" data-action="start" onclick="executeCommand('start')">
+                    Start
+                </button>
+                <button class="btn btn-danger" data-action="stop" onclick="executeCommand('stop')">
+                    Stop
+                </button>
+                <button class="btn btn-warning" data-action="restart" onclick="executeCommand('restart')">
+                    Restart
+                </button>
+                <button class="btn btn-primary" data-action="setup" onclick="executeCommand('setup')">
+                    Setup
+                </button>
+                <button class="btn btn-primary" data-action="add" onclick="executeCommand('add')" style="opacity: 0.85;">
+                    Connect
+                </button>
+                <button class="btn btn-secondary" data-action="debug" onclick="executeCommand('debug')">
+                    Debug
+                </button>
+            </div>
+        </div>
+
+        <!-- Log Viewer -->
+        <div class="log-viewer">
+            <div class="log-header">
+                <span class="log-title">
+                    <span class="log-status" id="log-status"></span>
+                    Live Logs
+                </span>
+                <div class="log-controls">
+                    <button class="btn btn-secondary" id="log-pause-btn" onclick="toggleLogPause()">Pause</button>
+                    <button class="btn btn-secondary" onclick="clearLogs()">Clear</button>
+                </div>
+            </div>
+            <div class="log-container" id="log-container"></div>
+        </div>
+    </div>
+
+    <!-- Aircraft Management Modal -->
+    <div class="modal-overlay" id="aircraft-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">Manage Aircraft</span>
+                <button class="modal-close" onclick="hideAircraftModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <ul class="aircraft-list" id="aircraft-list"></ul>
+                <h4 style="margin: 1.5rem 0 1rem; color: var(--text-secondary); font-size: 0.875rem;">Add New Aircraft</h4>
+                <div class="form-group">
+                    <label for="new-aircraft-id">Profile ID</label>
+                    <input type="text" id="new-aircraft-id" placeholder="e.g., alpha, aircraft-1">
+                </div>
+                <div class="form-group">
+                    <label for="new-aircraft-name">Display Name</label>
+                    <input type="text" id="new-aircraft-name" placeholder="e.g., Aircraft Alpha">
+                </div>
+                <div class="form-group">
+                    <label for="new-aircraft-ip">Tailscale IP</label>
+                    <input type="text" id="new-aircraft-ip" placeholder="e.g., 100.73.192.107">
+                </div>
+                <div class="form-group">
+                    <label for="new-aircraft-password">SSH Password <span style="color: var(--text-muted); font-weight: normal;">(for first-time setup)</span></label>
+                    <input type="password" id="new-aircraft-password" placeholder="Router root password">
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
+                        Used once to install SSH key. Can be cleared after setup.
+                    </small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideAircraftModal()">Close</button>
+                <button class="btn btn-primary" onclick="addAircraft()">Add Aircraft</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Command Output Modal -->
+    <div class="modal-overlay" id="command-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title" id="command-modal-title">Command Output</span>
+                <button class="modal-close" onclick="hideCommandModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="command-output" id="command-output"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideCommandModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            statusPollInterval: 5000,
+            apiBase: '/cgi-bin',
+            maxLogLines: 500
+        };
+
+        // Application State
+        const state = {
+            connected: false,
+            status: null,
+            aircraft: [],
+            activeAircraft: null,
+            logsPaused: false,
+            eventSource: null,
+            connectionStartTime: null,
+            prevStats: null  // For rate calculation
+        };
+
+        // Format bytes to human readable
+        function formatBytes(bytes, decimals = 1) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
+        }
+
+        // Format bytes per second
+        function formatBytesPerSec(bytesPerSec) {
+            if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
+            if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+            return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
+        }
+
+        // Format packets
+        function formatPackets(packets) {
+            if (packets < 1000) return packets.toString();
+            if (packets < 1000000) return (packets / 1000).toFixed(1) + 'K';
+            return (packets / 1000000).toFixed(2) + 'M';
+        }
+
+        // Initialize application
+        document.addEventListener('DOMContentLoaded', () => {
+            loadAircraftProfiles();
+            startStatusPolling();
+            connectLogStream();
+            startConnectionTimer();
+        });
+
+        // Status Polling
+        async function fetchStatus() {
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/status.cgi`);
+                if (!response.ok) throw new Error('Status fetch failed');
+                const data = await response.json();
+                state.status = data;
+                updateStatusUI(data);
+                updateLastUpdateTime();
+            } catch (error) {
+                console.error('Status fetch error:', error);
+                showApiError();
+            }
+        }
+
+        function startStatusPolling() {
+            fetchStatus();
+            setInterval(fetchStatus, CONFIG.statusPollInterval);
+        }
+
+        function updateStatusUI(data) {
+            // GCS Status
+            setText('gcs-ts-ip', data.gcs.tailscale_ip || 'N/A');
+            setStatusValue('gcs-ts-status', data.gcs.tailscale_status);
+            setStatusValue('gcs-kcptun', data.gcs.services.kcptun_server);
+            setStatusValue('gcs-tincd', data.gcs.services.tincd);
+            setStatusValue('gcs-iface', data.gcs.services.l2bridge_interface);
+            setText('gcs-peers', data.gcs.tinc_peers);
+            setStatusValue('gcs-watchdog', data.gcs.watchdog);
+
+            // GCS Health Badge
+            const healthBadge = document.getElementById('gcs-health-badge');
+            healthBadge.textContent = data.gcs.health.status;
+            healthBadge.className = 'status-badge ' + data.gcs.health.status.toLowerCase();
+
+            // Aircraft Status
+            setText('aircraft-name', data.aircraft.profile_name || 'None');
+            setText('aircraft-ip', data.aircraft.tailscale_ip || 'N/A');
+            setText('aircraft-reachable', data.aircraft.reachable ? 'Yes' : 'No');
+
+            // Tailscale peer connection mode
+            const tsMode = data.aircraft.tailscale_peer?.mode || 'unknown';
+            const tsModeEl = document.getElementById('aircraft-ts-mode');
+            if (tsModeEl) {
+                let displayText = tsMode.charAt(0).toUpperCase() + tsMode.slice(1);
+                if (tsMode === 'relay' && data.aircraft.tailscale_peer?.relay) {
+                    displayText += ` (${data.aircraft.tailscale_peer.relay})`;
+                }
+                tsModeEl.textContent = displayText;
+                tsModeEl.className = 'status-value ' + tsMode;
+            }
+
+            setStatusValue('aircraft-kcptun', data.aircraft.services.kcptun_client);
+            setStatusValue('aircraft-tincd', data.aircraft.services.tincd);
+            setStatusValue('aircraft-iface', data.aircraft.services.l2bridge_interface);
+
+            // Aircraft Reachable Badge
+            const reachableBadge = document.getElementById('aircraft-reachable-badge');
+            reachableBadge.textContent = data.aircraft.reachable ? 'Reachable' : 'Unreachable';
+            reachableBadge.className = 'status-badge ' + (data.aircraft.reachable ? 'connected' : 'disconnected');
+
+            // Connection Status
+            const isConnected = data.connection.established;
+            state.connected = isConnected;
+
+            document.getElementById('connection-indicator').className =
+                'connection-indicator' + (isConnected ? ' connected' : '');
+            document.getElementById('conn-indicator').className =
+                'connection-indicator' + (isConnected ? ' connected' : '');
+
+            const connText = document.getElementById('conn-text');
+            connText.textContent = isConnected ? 'Connected' : 'Disconnected';
+            connText.className = 'connection-text ' + (isConnected ? 'connected' : 'disconnected');
+
+            // Update connection timer
+            if (isConnected && data.connection.duration_seconds > 0) {
+                state.connectionStartTime = Date.now() - (data.connection.duration_seconds * 1000);
+            } else if (!isConnected) {
+                state.connectionStartTime = null;
+                setText('conn-duration', '--:--:--');
+            }
+
+            // Update aircraft selector
+            if (data.aircraft.id) {
+                document.getElementById('aircraft-select').value = data.aircraft.id;
+            }
+
+            // Update Network Statistics
+            if (data.network_stats) {
+                updateNetworkStats(data.network_stats);
+            }
+
+            // Update version footer
+            const footer = document.getElementById('debug-footer');
+            if (footer && data.version) {
+                const v = data.version;
+                if (v.current && v.current !== 'unknown') {
+                    let text = 'v ' + v.current;
+                    if (v.update_available && v.latest) {
+                        text += ' \u00b7 <span style="color:#f0a030;">Update available (' + v.latest + ')</span>';
+                    }
+                    footer.innerHTML = text;
+                } else {
+                    footer.textContent = '';
+                }
+            }
+        }
+
+        function updateNetworkStats(stats) {
+            const l2b = stats.l2bridge;
+            const ts = stats.tailscale;
+            const now = stats.timestamp_ms;
+
+            // Use Tailscale interface stats for rates and totals
+            // (l2bridge is bridged to br-lan and sees all LAN traffic)
+            if (state.prevStats && state.prevStats.timestamp_ms) {
+                const timeDelta = (now - state.prevStats.timestamp_ms) / 1000; // seconds
+                if (timeDelta > 0 && timeDelta < 30) { // Sanity check
+                    const prevTs = state.prevStats.tailscale;
+
+                    // Calculate byte rates from Tailscale interface
+                    const rxRate = (ts.rx_bytes - prevTs.rx_bytes) / timeDelta;
+                    const txRate = (ts.tx_bytes - prevTs.tx_bytes) / timeDelta;
+
+                    // Calculate packet rates from Tailscale interface
+                    const rxPktRate = (ts.rx_packets - prevTs.rx_packets) / timeDelta;
+                    const txPktRate = (ts.tx_packets - prevTs.tx_packets) / timeDelta;
+                    const totalPktRate = rxPktRate + txPktRate;
+
+                    // Update rate displays
+                    setText('stat-rx-rate', formatBytesPerSec(Math.max(0, rxRate)));
+                    setText('stat-tx-rate', formatBytesPerSec(Math.max(0, txRate)));
+                    setText('stat-pkt-rate', Math.max(0, totalPktRate).toFixed(0) + ' pkt/s');
+                }
+            }
+
+            // Update totals from Tailscale interface
+            setText('stat-rx-total', 'Total: ' + formatBytes(ts.rx_bytes));
+            setText('stat-tx-total', 'Total: ' + formatBytes(ts.tx_bytes));
+            setText('stat-pkt-total', 'Total: ' + formatPackets(ts.rx_packets + ts.tx_packets));
+
+            // Update errors from l2bridge (tunnel interface)
+            const totalErrors = l2b.rx_errors + l2b.tx_errors;
+            const totalDropped = l2b.rx_dropped + l2b.tx_dropped;
+            setText('stat-errors', formatPackets(totalErrors));
+            setText('stat-dropped', 'Dropped: ' + formatPackets(totalDropped));
+
+            // Update details
+            setText('stat-rx-packets', formatPackets(ts.rx_packets));
+            setText('stat-tx-packets', formatPackets(ts.tx_packets));
+            setText('stat-multicast', formatPackets(l2b.multicast));
+            setText('stat-ts-total', formatBytes(ts.rx_bytes + ts.tx_bytes));
+
+            // Store for next rate calculation
+            state.prevStats = stats;
+        }
+
+        function setText(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        }
+
+        function setStatusValue(id, status) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = status || 'unknown';
+                el.className = 'status-value ' + (status || 'unknown').toLowerCase();
+            }
+        }
+
+        function updateLastUpdateTime() {
+            const now = new Date();
+            setText('last-update', now.toLocaleTimeString());
+        }
+
+        function showApiError() {
+            document.getElementById('connection-indicator').className = 'connection-indicator';
+            setText('gcs-ts-ip', 'API Error');
+        }
+
+        // Connection Timer
+        function startConnectionTimer() {
+            setInterval(() => {
+                if (state.connectionStartTime) {
+                    const elapsed = Math.floor((Date.now() - state.connectionStartTime) / 1000);
+                    setText('conn-duration', formatDuration(elapsed));
+                }
+            }, 1000);
+        }
+
+        function formatDuration(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = seconds % 60;
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // Log Streaming
+        function connectLogStream() {
+            if (state.eventSource) {
+                state.eventSource.close();
+            }
+
+            state.eventSource = new EventSource(`${CONFIG.apiBase}/logs.cgi`);
+
+            state.eventSource.onopen = () => {
+                document.getElementById('log-status').className = 'log-status';
+            };
+
+            state.eventSource.onmessage = (event) => {
+                if (!state.logsPaused) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        appendLog(data);
+                    } catch (e) {
+                        // Not JSON, just append as text
+                        appendLog({ message: event.data, level: 'info', source: '' });
+                    }
+                }
+            };
+
+            state.eventSource.onerror = () => {
+                document.getElementById('log-status').className = 'log-status disconnected';
+                setTimeout(() => connectLogStream(), 3000);
+            };
+
+            state.eventSource.addEventListener('connected', () => {
+                appendLog({ message: 'Log stream connected', level: 'info', source: 'ui' });
+            });
+        }
+
+        function appendLog(entry) {
+            const container = document.getElementById('log-container');
+            const line = document.createElement('div');
+            line.className = 'log-line ' + (entry.level || 'info');
+
+            const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+            const source = entry.source ? `[${entry.source}]` : '';
+
+            line.innerHTML = `<span class="log-time">${time}</span>` +
+                           (source ? `<span class="log-source">${source}</span>` : '') +
+                           escapeHtml(entry.message || '');
+
+            container.appendChild(line);
+
+            // Limit log lines
+            while (container.children.length > CONFIG.maxLogLines) {
+                container.removeChild(container.firstChild);
+            }
+
+            // Auto-scroll
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function toggleLogPause() {
+            state.logsPaused = !state.logsPaused;
+            const btn = document.getElementById('log-pause-btn');
+            btn.textContent = state.logsPaused ? 'Resume' : 'Pause';
+            document.getElementById('log-status').className =
+                'log-status' + (state.logsPaused ? ' paused' : '');
+        }
+
+        function clearLogs() {
+            document.getElementById('log-container').innerHTML = '';
+        }
+
+        // Command Execution
+        async function executeCommand(action) {
+            const btn = document.querySelector(`[data-action="${action}"]`);
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Running...';
+
+            const activeId = document.getElementById('aircraft-select').value;
+            let aircraftIp = null;
+            let aircraftName = null;
+
+            // Get IP and name from state if we have profiles loaded
+            if (activeId && state.aircraft.length > 0) {
+                const profile = state.aircraft.find(a => a.id === activeId);
+                if (profile) {
+                    aircraftIp = profile.tailscale_ip;
+                    aircraftName = profile.name;
+                }
+            }
+
+            // Fallback to status data
+            if (!aircraftIp && state.status?.aircraft?.tailscale_ip) {
+                aircraftIp = state.status.aircraft.tailscale_ip;
+                aircraftName = state.status.aircraft.profile_name;
+            }
+
+            if (['start', 'stop', 'restart', 'setup', 'add', 'debug'].includes(action) && !aircraftIp) {
+                showToast('Please select an aircraft first', 'error');
+                btn.disabled = false;
+                btn.textContent = originalText;
+                return;
+            }
+
+            try {
+                const payload = { action: action, aircraft_ip: aircraftIp };
+                if (['setup', 'add'].includes(action) && aircraftName) {
+                    payload.aircraft_name = aircraftName;
+                }
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast(`Command "${action}" completed successfully`, 'success');
+                } else {
+                    showToast(`Command "${action}" failed: ${result.error || 'Unknown error'}`, 'error');
+                }
+
+                // Show output in modal
+                showCommandOutput(action, result);
+
+                // Refresh status
+                setTimeout(fetchStatus, 1000);
+            } catch (error) {
+                showToast(`Command failed: ${error.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
+
+        function showCommandOutput(command, result) {
+            document.getElementById('command-modal-title').textContent =
+                `Command: ${command} (${result.success ? 'Success' : 'Failed'})`;
+            document.getElementById('command-output').textContent =
+                result.output || result.error || 'No output';
+            document.getElementById('command-modal').classList.add('active');
+        }
+
+        function hideCommandModal() {
+            document.getElementById('command-modal').classList.remove('active');
+        }
+
+        // Aircraft Management
+        async function loadAircraftProfiles() {
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi?action=list_aircraft`);
+                const data = await response.json();
+
+                state.aircraft = [];
+                state.activeAircraft = data.active;
+
+                if (data.profiles) {
+                    for (const [id, profile] of Object.entries(data.profiles)) {
+                        state.aircraft.push({ id, ...profile });
+                    }
+                }
+
+                updateAircraftSelector();
+                updateAircraftList();
+            } catch (error) {
+                console.error('Failed to load aircraft profiles:', error);
+            }
+        }
+
+        function updateAircraftSelector() {
+            const select = document.getElementById('aircraft-select');
+            const currentValue = select.value;
+
+            select.innerHTML = '<option value="">-- Select Aircraft --</option>';
+
+            state.aircraft.forEach(aircraft => {
+                const option = document.createElement('option');
+                option.value = aircraft.id;
+                option.textContent = aircraft.name;
+                if (aircraft.id === state.activeAircraft) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+
+            // Restore selection if still valid
+            if (currentValue && state.aircraft.find(a => a.id === currentValue)) {
+                select.value = currentValue;
+            }
+
+            select.onchange = () => setActiveAircraft(select.value);
+        }
+
+        function updateAircraftList() {
+            const list = document.getElementById('aircraft-list');
+            list.innerHTML = '';
+
+            if (state.aircraft.length === 0) {
+                list.innerHTML = '<li style="color: var(--text-secondary); text-align: center; padding: 1rem;">No aircraft configured</li>';
+                return;
+            }
+
+            state.aircraft.forEach(aircraft => {
+                const item = document.createElement('li');
+                item.className = 'aircraft-item' + (aircraft.id === state.activeAircraft ? ' active' : '');
+                const hasPassword = aircraft.ssh_password && aircraft.ssh_password.length > 0;
+                item.innerHTML = `
+                    <div class="aircraft-info">
+                        <h4>${escapeHtml(aircraft.name)}</h4>
+                        <p>${escapeHtml(aircraft.tailscale_ip)}</p>
+                        <small style="color: ${hasPassword ? 'var(--status-running)' : 'var(--text-muted)'}; font-size: 0.7rem;">
+                            ${hasPassword ? '&#128274; Password stored' : '&#128275; No password (key auth)'}
+                        </small>
+                    </div>
+                    <div class="aircraft-actions">
+                        ${hasPassword ? `<button class="btn-icon" onclick="event.stopPropagation(); clearPassword('${aircraft.id}')" title="Clear Password" style="font-size: 0.7rem;">&#128274;</button>` : ''}
+                        <button class="btn-icon" onclick="event.stopPropagation(); setActiveAircraft('${aircraft.id}')" title="Set Active">
+                            &#10003;
+                        </button>
+                        <button class="btn-icon delete" onclick="event.stopPropagation(); deleteAircraft('${aircraft.id}')" title="Delete">
+                            &#10005;
+                        </button>
+                    </div>
+                `;
+                item.onclick = () => setActiveAircraft(aircraft.id);
+                list.appendChild(item);
+            });
+        }
+
+        async function setActiveAircraft(id) {
+            if (!id) return;
+
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_active', id: id })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    state.activeAircraft = id;
+                    updateAircraftSelector();
+                    updateAircraftList();
+                    showToast('Active aircraft updated', 'success');
+                    fetchStatus();
+                } else {
+                    showToast(result.error || 'Failed to set active aircraft', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to set active aircraft', 'error');
+            }
+        }
+
+        async function addAircraft() {
+            const id = document.getElementById('new-aircraft-id').value.trim();
+            const name = document.getElementById('new-aircraft-name').value.trim();
+            const ip = document.getElementById('new-aircraft-ip').value.trim();
+            const password = document.getElementById('new-aircraft-password').value;
+
+            if (!id || !name || !ip) {
+                showToast('Please fill in ID, name, and IP', 'error');
+                return;
+            }
+
+            if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+                showToast('Profile ID must be alphanumeric (dashes and underscores allowed)', 'error');
+                return;
+            }
+
+            if (!/^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                showToast('Tailscale IP must be in format 100.x.x.x', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'add_aircraft',
+                        id: id,
+                        name: name,
+                        tailscale_ip: ip,
+                        ssh_password: password
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast('Aircraft added successfully', 'success');
+                    document.getElementById('new-aircraft-id').value = '';
+                    document.getElementById('new-aircraft-name').value = '';
+                    document.getElementById('new-aircraft-ip').value = '';
+                    document.getElementById('new-aircraft-password').value = '';
+                    loadAircraftProfiles();
+                } else {
+                    showToast(result.error || 'Failed to add aircraft', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to add aircraft', 'error');
+            }
+        }
+
+        async function deleteAircraft(id) {
+            if (!confirm(`Are you sure you want to delete this aircraft profile?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'delete_aircraft', id: id })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast('Aircraft deleted', 'success');
+                    loadAircraftProfiles();
+                } else {
+                    showToast(result.error || 'Failed to delete aircraft', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to delete aircraft', 'error');
+            }
+        }
+
+        async function clearPassword(id) {
+            if (!confirm('Clear stored password for this aircraft? You will need to enter the password again for future setups.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${CONFIG.apiBase}/api.cgi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'update_aircraft',
+                        id: id,
+                        ssh_password: '__CLEAR__'
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast('Password cleared', 'success');
+                    loadAircraftProfiles();
+                } else {
+                    showToast(result.error || 'Failed to clear password', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to clear password', 'error');
+            }
+        }
+
+        function showAircraftModal() {
+            document.getElementById('aircraft-modal').classList.add('active');
+            loadAircraftProfiles();
+        }
+
+        function hideAircraftModal() {
+            document.getElementById('aircraft-modal').classList.remove('active');
+        }
+
+        // Toast Notifications
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(100%)';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // Utility
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Close modals on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                hideAircraftModal();
+                hideCommandModal();
+            }
+        });
+
+        // Close modals on overlay click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('active');
+                }
+            });
+        });
+    </script>
+    <div id="debug-footer" style="text-align:center; padding:6px; font-size:11px; color:#555; border-top:1px solid #333; margin-top:12px; font-family:monospace;"></div>
+</body>
+</html>

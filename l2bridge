@@ -59,6 +59,191 @@ SSH_KEY="/root/.ssh/id_dropbear"
 SSH_PUBKEY="/root/.ssh/id_dropbear.pub"
 
 #############################################
+# OPKG FEED SETUP
+#############################################
+# GL.iNet firmware (e.g. AX1800/AXT1800) ships with custom feeds that lack
+# standard OpenWRT packages like tinc and kcptun. This function detects the
+# situation and adds the official OpenWRT packages feed with the correct
+# architecture mapping.
+#
+# Runs locally when called without arguments, or remotely via ssh prefix.
+OPKG_FEED_SETUP_SCRIPT='
+    # Only needed on GL.iNet firmware with non-standard arch
+    ARCH=$(opkg print-architecture 2>/dev/null | grep -oE "aarch64_cortex-a53_neon-vfpv4" | head -1)
+    [ -z "$ARCH" ] && exit 0
+
+    # Get OpenWRT release version for feed URL
+    RELEASE=$(. /etc/openwrt_release 2>/dev/null; echo "$DISTRIB_RELEASE")
+    case "$RELEASE" in
+        *SNAPSHOT*) FEED_VER="23.05.5" ;;
+        [0-9]*) FEED_VER="$RELEASE" ;;
+        *) FEED_VER="23.05.5" ;;
+    esac
+
+    FEED_URL="https://downloads.openwrt.org/releases/${FEED_VER}/packages/aarch64_cortex-a53/packages"
+    FEEDS_FILE="/etc/opkg/customfeeds.conf"
+
+    # Add packages feed if not already present
+    if ! grep -q "openwrt_packages" "$FEEDS_FILE" 2>/dev/null; then
+        echo "src/gz openwrt_packages $FEED_URL" >> "$FEEDS_FILE"
+    fi
+
+    # Add compatible architecture so opkg accepts the packages
+    if ! grep -q "arch aarch64_cortex-a53 " /etc/opkg.conf 2>/dev/null; then
+        echo "arch aarch64_cortex-a53 9" >> /etc/opkg.conf
+    fi
+'
+
+ensure_opkg_feeds() {
+    ( eval "$OPKG_FEED_SETUP_SCRIPT" )
+}
+
+ensure_opkg_feeds_remote() {
+    local ip="$1"
+    ssh_aircraft "$ip" "$OPKG_FEED_SETUP_SCRIPT"
+}
+
+#############################################
+# PACKAGE INSTALLATION (avoids slow opkg update)
+#############################################
+# Install packages from bundled .ipk files if available, falling back to
+# opkg feeds only when necessary. This avoids the ~30-second opkg update
+# on resource-constrained routers.
+
+_get_pkg_dir() {
+    local script_dir
+    script_dir=$(cd "$(dirname "$0")" && pwd)
+    echo "$script_dir/packages"
+}
+
+# Install a single package locally, checking if the binary already exists.
+# Usage: ensure_pkg_local <binary_name> <package_name> [subdir]
+# subdir defaults to "common"
+ensure_pkg_local() {
+    local binary="$1" package="$2" subdir="${3:-common}"
+    command -v "$binary" >/dev/null 2>&1 && return 0
+
+    local pkg_dir
+    pkg_dir=$(_get_pkg_dir)
+
+    # Try bundled .ipk first
+    if ls "$pkg_dir/$subdir/${package}_"*.ipk >/dev/null 2>&1; then
+        opkg install "$pkg_dir/$subdir/${package}_"*.ipk --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+    fi
+
+    # Check again
+    command -v "$binary" >/dev/null 2>&1 && return 0
+
+    # Slow fallback: opkg update + install from feeds
+    echo "    Falling back to opkg feeds for $package..."
+    opkg update >/dev/null 2>&1 || true
+    opkg install "$package" >/dev/null 2>&1 || true
+
+    command -v "$binary" >/dev/null 2>&1
+}
+
+# Install all required packages for a role from bundled .ipks.
+# Only falls back to opkg update if bundled install fails.
+ensure_packages_local() {
+    local role="$1"
+    local pkg_dir
+    pkg_dir=$(_get_pkg_dir)
+
+    # Check if key binaries already exist
+    local need_install=""
+    if ! command -v tinc >/dev/null 2>&1; then
+        need_install=1
+    fi
+    case "$role" in
+        gcs)      command -v kcptun-server >/dev/null 2>&1 || need_install=1 ;;
+        aircraft)  command -v kcptun-client >/dev/null 2>&1 || need_install=1 ;;
+    esac
+
+    [ -z "$need_install" ] && { echo "    Packages already installed."; return 0; }
+
+    # Try bundled .ipk files (fast path - no opkg update)
+    if [ -d "$pkg_dir/common" ]; then
+        opkg install "$pkg_dir/common/"*.ipk --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+        case "$role" in
+            gcs)
+                [ -d "$pkg_dir/gcs" ] && opkg install "$pkg_dir/gcs/"*.ipk --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+                ;;
+            aircraft)
+                [ -d "$pkg_dir/aircraft" ] && opkg install "$pkg_dir/aircraft/"*.ipk --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+                ;;
+        esac
+    fi
+
+    # Verify - if still missing, fall back to slow path
+    local missing=""
+    command -v tinc >/dev/null 2>&1 || missing="tinc $missing"
+    case "$role" in
+        gcs)      command -v kcptun-server >/dev/null 2>&1 || missing="kcptun-server $missing" ;;
+        aircraft)  command -v kcptun-client >/dev/null 2>&1 || missing="kcptun-client $missing" ;;
+    esac
+
+    if [ -n "$missing" ]; then
+        echo "    Bundled packages incomplete, falling back to opkg feeds..."
+        opkg update >/dev/null 2>&1 || true
+        for pkg in $missing; do
+            opkg install "$pkg" >/dev/null 2>&1 || true
+        done
+    fi
+
+    # Final verification
+    local still_missing=""
+    command -v tinc >/dev/null 2>&1 || still_missing="tinc $still_missing"
+    case "$role" in
+        gcs)      command -v kcptun-server >/dev/null 2>&1 || still_missing="kcptun-server $still_missing" ;;
+        aircraft)  command -v kcptun-client >/dev/null 2>&1 || still_missing="kcptun-client $still_missing" ;;
+    esac
+    if [ -n "$still_missing" ]; then
+        log_error "Required packages still missing: $still_missing"
+        log_error "Install failed. Check opkg feeds or refresh bundled packages."
+        exit 1
+    fi
+}
+
+# Install packages on a remote aircraft via SSH.
+# Checks binaries first, tries bundled .ipks if the repo exists there,
+# then falls back to opkg feeds.
+ensure_packages_remote() {
+    local ip="$1"
+    ssh_aircraft "$ip" '
+        need_install=""
+        command -v tinc >/dev/null 2>&1 || need_install=1
+        command -v kcptun-client >/dev/null 2>&1 || need_install=1
+        [ -z "$need_install" ] && { echo "    Packages already installed."; exit 0; }
+
+        # Try bundled .ipk files if repo exists on aircraft
+        pkg_dir="/root/RVR_v0.3/packages"
+        if [ -d "$pkg_dir/common" ]; then
+            opkg install "$pkg_dir/common/"*.ipk "$pkg_dir/aircraft/"*.ipk \
+                --force-depends 2>&1 | grep -vE "has no valid architecture|Configuring" || true
+        fi
+
+        # Check again
+        missing=""
+        command -v tinc >/dev/null 2>&1 || missing="tinc $missing"
+        command -v kcptun-client >/dev/null 2>&1 || missing="kcptun-client $missing"
+
+        if [ -n "$missing" ]; then
+            echo "    Falling back to opkg feeds..."
+            opkg update >/dev/null 2>&1 || true
+            for pkg in $missing; do
+                opkg install "$pkg" >/dev/null 2>&1 || true
+            done
+        fi
+
+        # Final verification
+        command -v tinc >/dev/null 2>&1 && command -v kcptun-client >/dev/null 2>&1 || {
+            echo "ERROR: Required packages missing on aircraft"
+            exit 1
+        }
+    '
+}
+
+#############################################
 # HELPERS
 #############################################
 print_usage() {
@@ -290,8 +475,7 @@ setup_ssh_keys() {
             sshpass -p "$password" dbclient -y root@"$ip" "$ssh_cmd" 2>/dev/null
         else
             echo "    Installing sshpass..."
-            opkg update >/dev/null 2>&1
-            opkg install sshpass >/dev/null 2>&1
+            ensure_pkg_local sshpass sshpass gcs
             if command -v sshpass >/dev/null 2>&1; then
                 sshpass -p "$password" dbclient -y root@"$ip" "$ssh_cmd" 2>/dev/null
             else
@@ -644,8 +828,8 @@ cmd_setup() {
 
     # GCS SETUP
     echo "[GCS] Installing packages..."
-    opkg update >/dev/null 2>&1 || true
-    opkg install tinc kcptun-server >/dev/null 2>&1 || true
+    ensure_opkg_feeds
+    ensure_packages_local gcs
 
     echo "[GCS] Initializing tinc..."
     rm -rf /etc/tinc/$NETWORK_NAME
@@ -766,7 +950,8 @@ INITSCRIPT
 
     # AIRCRAFT SETUP
     echo "[Aircraft] Installing packages..."
-    ssh_aircraft "$AIRCRAFT_IP" 'opkg update >/dev/null 2>&1; opkg install tinc kcptun-client >/dev/null 2>&1 || true'
+    ensure_opkg_feeds_remote "$AIRCRAFT_IP"
+    ensure_packages_remote "$AIRCRAFT_IP"
 
     echo "[Aircraft] Initializing tinc..."
     ssh_aircraft "$AIRCRAFT_IP" "rm -rf /etc/tinc/$NETWORK_NAME; mkdir -p /etc/tinc/$NETWORK_NAME/hosts /etc/kcptun; tinc -n $NETWORK_NAME init aircraft"
@@ -1050,25 +1235,155 @@ cmd_config() {
 
 cmd_uninstall() {
     local AIRCRAFT_IP=$(get_aircraft_ip "$1")
-    printf "Remove all config? [y/N] "; read confirm
-    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && exit 0
-    cmd_watchdog_remove 2>/dev/null || true
+    local script_dir=$(dirname "$(readlink -f "$0")")
+
+    echo ""
+    echo "This will completely remove RVR L2 Bridge and all configuration."
+    echo ""
+    echo "The following will be removed:"
+    echo "  - L2Bridge services, configs, and init scripts"
+    echo "  - Watchdog and auto-start entries"
+    [ -d "$WEBUI_ROOT" ] && echo "  - Web UI ($WEBUI_ROOT, uhttpd config, firewall rule)"
+    echo "  - Installed packages (tinc, kcptun, sshpass, git, etc.)"
+    [ -n "$AIRCRAFT_IP" ] && echo "  - Aircraft configuration on $AIRCRAFT_IP (if reachable)"
+    echo "  - opkg configuration changes"
+    echo "  - Repository ($script_dir)"
+    echo "  - /usr/bin/l2bridge symlink"
+    echo ""
+    printf "Continue? [y/N] "
+    read confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "Aborted."; exit 0; }
+
+    echo ""
+
+    # 1. Stop services on both sides
+    echo "[*] Stopping services..."
     cmd_stop_internal "$AIRCRAFT_IP" 2>/dev/null || true
+
+    # 2. Remove watchdog (crontab, script, rc.local)
+    echo "[*] Removing watchdog..."
+    cmd_watchdog_remove 2>/dev/null || true
+
+    # 3. Remove Web UI if installed
+    if [ -d "$WEBUI_ROOT" ] || uci get uhttpd.l2bridge >/dev/null 2>&1; then
+        echo "[*] Removing Web UI..."
+        /etc/init.d/uhttpd stop 2>/dev/null || true
+        if uci get uhttpd.l2bridge >/dev/null 2>&1; then
+            uci delete uhttpd.l2bridge
+            uci commit uhttpd
+        fi
+        if uci get firewall.l2bridge_webui >/dev/null 2>&1; then
+            uci delete firewall.l2bridge_webui
+            uci commit firewall
+            /etc/init.d/firewall reload 2>/dev/null || true
+        fi
+        rm -rf "$WEBUI_ROOT"
+        /etc/init.d/uhttpd start 2>/dev/null || true
+    fi
+
+    # 4. Run tinc-down to clean iptables rules before removing configs
+    echo "[*] Cleaning up iptables rules..."
+    if [ -x "/etc/tinc/$NETWORK_NAME/tinc-down" ]; then
+        INTERFACE="l2bridge" /etc/tinc/$NETWORK_NAME/tinc-down 2>/dev/null || true
+    fi
+
+    # 5. Disable and remove GCS init scripts
+    echo "[*] Removing GCS service configuration..."
     /etc/init.d/kcptun-server disable 2>/dev/null || true
     /etc/init.d/tinc-l2bridge disable 2>/dev/null || true
-    rm -rf /etc/tinc/$NETWORK_NAME /etc/kcptun/server.json /etc/init.d/kcptun-server /etc/init.d/tinc-l2bridge "$STATE_FILE" "$HEALTH_FILE"
-    [ -n "$AIRCRAFT_IP" ] && check_aircraft_reachable "$AIRCRAFT_IP" && ssh_aircraft "$AIRCRAFT_IP" '
-        /etc/init.d/kcptun-client disable 2>/dev/null || true
-        /etc/init.d/tinc-l2bridge disable 2>/dev/null || true
-        rm -rf /etc/tinc/l2bridge /etc/kcptun/client.json /etc/init.d/kcptun-client /etc/init.d/tinc-l2bridge
-    ' 2>/dev/null || true
-    echo "Uninstall complete."
+    rm -f /etc/init.d/kcptun-server /etc/init.d/tinc-l2bridge
+
+    # 6. Remove GCS config files
+    rm -rf "/etc/tinc/$NETWORK_NAME"
+    rm -f /etc/kcptun/server.json
+    rmdir /etc/kcptun 2>/dev/null || true
+    rm -f "$STATE_FILE" "$HEALTH_FILE"
+    rm -rf "$WEBUI_CONFIG_DIR"
+
+    # 7. Revert STP on bridge
+    echo "[*] Reverting STP on bridge..."
+    uci delete network.@device[0].stp 2>/dev/null || true
+    uci commit network 2>/dev/null || true
+
+    # 8. Clean up aircraft (if reachable)
+    if [ -n "$AIRCRAFT_IP" ] && check_aircraft_reachable "$AIRCRAFT_IP" 2>/dev/null; then
+        echo "[*] Cleaning up aircraft ($AIRCRAFT_IP)..."
+        ssh_aircraft "$AIRCRAFT_IP" '
+            # Stop services
+            /etc/init.d/kcptun-client stop 2>/dev/null || true
+            /etc/init.d/tinc-l2bridge stop 2>/dev/null || true
+
+            # Run tinc-down for iptables cleanup
+            if [ -x "/etc/tinc/l2bridge/tinc-down" ]; then
+                INTERFACE="l2bridge" /etc/tinc/l2bridge/tinc-down 2>/dev/null || true
+            fi
+
+            # Disable and remove init scripts
+            /etc/init.d/kcptun-client disable 2>/dev/null || true
+            /etc/init.d/tinc-l2bridge disable 2>/dev/null || true
+            rm -f /etc/init.d/kcptun-client /etc/init.d/tinc-l2bridge
+
+            # Remove configs
+            rm -rf /etc/tinc/l2bridge
+            rm -f /etc/kcptun/client.json
+            rmdir /etc/kcptun 2>/dev/null || true
+
+            # Revert STP
+            uci delete network.@device[0].stp 2>/dev/null || true
+            uci commit network 2>/dev/null || true
+
+            # Remove packages (skip shared deps like libopenssl3, zlib)
+            opkg remove --force-depends tinc kcptun-client kcptun-config kmod-tun 2>/dev/null || true
+
+            # Remove opkg config changes
+            sed -i "/arch aarch64_cortex-a53_neon-vfpv4 /d" /etc/opkg.conf 2>/dev/null || true
+            sed -i "/arch aarch64_cortex-a53 /d" /etc/opkg.conf 2>/dev/null || true
+            sed -i "/arch all /d" /etc/opkg.conf 2>/dev/null || true
+            sed -i "/openwrt_packages/d" /etc/opkg/customfeeds.conf 2>/dev/null || true
+
+            # Clean temp files
+            rm -f /tmp/l2bridge*
+        ' 2>/dev/null || log_warn "Aircraft cleanup failed (may need manual cleanup)"
+    elif [ -n "$AIRCRAFT_IP" ]; then
+        echo "[!] Aircraft $AIRCRAFT_IP unreachable - skipping remote cleanup"
+        echo "    Run manually on aircraft: rm -rf /etc/tinc/l2bridge /etc/kcptun /etc/init.d/kcptun-client /etc/init.d/tinc-l2bridge"
+    fi
+
+    # 9. Remove installed packages on GCS (skip shared deps)
+    echo "[*] Removing installed packages..."
+    opkg remove --force-depends tinc kcptun-server kcptun-config kmod-tun sshpass \
+        git git-http libcurl4 ca-bundle liblzo2 2>/dev/null || true
+
+    # 10. Clean up opkg config changes
+    echo "[*] Reverting opkg configuration..."
+    sed -i "/arch aarch64_cortex-a53_neon-vfpv4 /d" /etc/opkg.conf 2>/dev/null || true
+    sed -i "/arch aarch64_cortex-a53 /d" /etc/opkg.conf 2>/dev/null || true
+    sed -i "/arch all /d" /etc/opkg.conf 2>/dev/null || true
+    sed -i "/openwrt_packages/d" /etc/opkg/customfeeds.conf 2>/dev/null || true
+
+    # 11. Remove l2bridge symlink
+    echo "[*] Removing l2bridge..."
+    rm -f /usr/bin/l2bridge
+
+    # 12. Clean temp files
+    rm -f /tmp/l2bridge* /tmp/rvr-*
+
+    # 13. Remove repository
+    if [ -d "$script_dir" ]; then
+        echo "[*] Removing repository ($script_dir)..."
+        rm -rf "$script_dir"
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "  RVR L2 Bridge fully uninstalled."
+    echo "=========================================="
 }
 
 #############################################
 # WEB UI INSTALL/REMOVE
 #############################################
-WEBUI_ROOT="/www/l2bridge"
+WEBUI_ROOT="/www/rvr"
 WEBUI_CONFIG_DIR="/etc/l2bridge"
 WEBUI_PORT="8081"
 
@@ -1082,7 +1397,7 @@ cmd_webui_install() {
 
     # Check if source files exist (for development install from local directory)
     local script_dir=$(dirname "$(readlink -f "$0")")
-    local src_www="$script_dir/www/l2bridge"
+    local src_www="$script_dir/www"
 
     if [ -d "$src_www" ]; then
         log_info "Installing from local source: $src_www"
@@ -1090,7 +1405,7 @@ cmd_webui_install() {
         cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
     else
         log_error "Web UI source files not found at $src_www"
-        log_info "Please ensure www/l2bridge directory exists alongside this script"
+        log_info "Please ensure www/ directory exists alongside this script"
         exit 1
     fi
 
@@ -1241,14 +1556,14 @@ cmd_update() {
 
     git reset --hard origin/main 2>&1 || { log_error "Failed to apply updates"; exit 1; }
     chmod +x "$repo_dir/l2bridge"
-    chmod +x "$repo_dir/www/l2bridge/cgi-bin/"*.cgi 2>/dev/null
+    chmod +x "$repo_dir/www/cgi-bin/"*.cgi 2>/dev/null
 
     echo "  Updated: $old_hash -> $new_hash"
 
     # Refresh web UI files if installed
     if [ -d "$WEBUI_ROOT" ]; then
         log_info "Updating web UI files..."
-        local src_www="$repo_dir/www/l2bridge"
+        local src_www="$repo_dir/www"
         if [ -d "$src_www" ]; then
             cp "$src_www/index.html" "$WEBUI_ROOT/"
             cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
