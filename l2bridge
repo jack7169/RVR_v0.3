@@ -227,10 +227,17 @@ ensure_packages_remote() {
     done
 
     if [ -n "$pkg_dir" ]; then
-        echo "    Copying packages to aircraft..."
-        tar -cf - -C "$pkg_dir" common aircraft | \
-            ssh_aircraft "$ip" "rm -rf /tmp/rvr-packages; mkdir -p /tmp/rvr-packages; tar -xf - -C /tmp/rvr-packages"
+        local pkg_count=$(find "$pkg_dir/common" "$pkg_dir/aircraft" -name '*.ipk' 2>/dev/null | wc -l)
+        echo "    Copying $pkg_count packages to aircraft..."
 
+        # Create local tarball, then cat through dbclient (avoids tee pipe interference)
+        local tmp_tar="/tmp/rvr-packages.tar"
+        tar -cf "$tmp_tar" -C "$pkg_dir" common aircraft 2>/dev/null
+        ssh_aircraft "$ip" "rm -rf /tmp/rvr-packages; mkdir -p /tmp/rvr-packages" 2>/dev/null
+        cat "$tmp_tar" | dbclient -i "$SSH_KEY" -y root@"$ip" "tar -xf - -C /tmp/rvr-packages" 2>/dev/null
+        rm -f "$tmp_tar"
+
+        echo "    Installing packages on aircraft..."
         ssh_aircraft "$ip" '
             if ls /tmp/rvr-packages/common/*.ipk >/dev/null 2>&1; then
                 opkg install /tmp/rvr-packages/common/*.ipk /tmp/rvr-packages/aircraft/*.ipk \
@@ -238,6 +245,7 @@ ensure_packages_remote() {
             fi
             rm -rf /tmp/rvr-packages
         '
+        echo "    Packages installed."
     fi
 
     # Check what's still missing, fall back to opkg feeds
