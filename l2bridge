@@ -1857,12 +1857,12 @@ cmd_capture() {
             fi
 
             echo "Starting capture on l2bridge for ${duration}s -> $outfile"
-            (tcpdump -i l2bridge -s 0 -w "$outfile" >/dev/null 2>&1 & echo $! > "$CAPTURE_PID_FILE"; wait $!; rm -f "$CAPTURE_PID_FILE" "/tmp/l2bridge-capture.start") &
+            (tcpdump -i l2bridge -s 0 -w "$outfile" >/dev/null 2>&1 & echo $! > "$CAPTURE_PID_FILE"; wait $!; rm -f "$CAPTURE_PID_FILE" "/tmp/l2bridge-capture.start") >/dev/null 2>&1 &
             sleep 1
             local pid=$(cat "$CAPTURE_PID_FILE" 2>/dev/null)
             date +%s > /tmp/l2bridge-capture.start
             # Schedule stop after duration
-            (sleep "$duration"; [ -f "$CAPTURE_PID_FILE" ] && kill "$(cat "$CAPTURE_PID_FILE")" 2>/dev/null) &
+            (sleep "$duration"; [ -f "$CAPTURE_PID_FILE" ] && kill "$(cat "$CAPTURE_PID_FILE")" 2>/dev/null) >/dev/null 2>&1 &
             echo "Capture started (PID ${pid:-?}, duration ${duration}s)"
             echo "Stop early with: l2bridge capture stop"
             echo "Download file: $outfile"
