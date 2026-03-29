@@ -669,7 +669,7 @@ stop_local_services() {
 stop_aircraft_services() {
     local AIRCRAFT_IP="$1"
     log_info "Stopping aircraft services..."
-    check_aircraft_reachable "$AIRCRAFT_IP" && ssh_key_works "$AIRCRAFT_IP" && ssh_aircraft "$AIRCRAFT_IP" '
+    check_aircraft_reachable "$AIRCRAFT_IP" && ssh_aircraft "$AIRCRAFT_IP" '
         /etc/init.d/tinc-l2bridge stop 2>/dev/null || true
         /etc/init.d/kcptun-client stop 2>/dev/null || true
         nft delete table bridge l2bridge_filter 2>/dev/null || true
