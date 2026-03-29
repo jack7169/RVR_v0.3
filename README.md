@@ -12,6 +12,8 @@ This tool creates a transparent Layer 2 bridge between a Ground Control Station 
 - **Flight Control** - MAVLink and other protocol support for aircraft command and control
 - **Drone Relay** - FPV video relay from deployed Group 1 surveillance drones through mothership aircraft
 - **Zero Modification** - Transparent integration with existing aircraft systems
+- **Smart Routing** - Only LAN traffic crosses the bridge; internet traffic routes locally on each side
+- **Packet Capture** - Built-in tcpdump integration for Wireshark-compatible traffic analysis
 
 ### Operational Advantages
 
@@ -180,6 +182,11 @@ Monitoring:
   debug <aircraft_ip>     Full diagnostics on both sides
   config                  Show current configuration
 
+Packet Capture:
+  capture [duration]      Capture bridge traffic to pcap (default: 60s)
+  capture stop            Stop an active capture
+  capture status          Show capture status and file info
+
 Auto-Recovery:
   monitor [--daemon]      Health check and auto-repair
   watchdog-install        Install cron-based watchdog
@@ -219,6 +226,12 @@ l2bridge update
 
 # Install web UI for browser-based control
 l2bridge webui-install
+
+# Capture bridge traffic for 30 seconds (Wireshark-compatible)
+l2bridge capture 30
+
+# Stop an active capture
+l2bridge capture stop
 
 # Completely remove everything (restores device to pre-install state)
 l2bridge uninstall
@@ -345,10 +358,14 @@ http://<router-tailscale-ip>:8081
 | Feature | Description |
 |---------|-------------|
 | **Status Dashboard** | Real-time GCS and aircraft status with service indicators |
+| **Internet Status** | Independent internet connectivity check on GCS (separate from bridge health) |
 | **Connection Monitor** | Connection state, duration timer, health status |
 | **Network Statistics** | Live upload/download rates, packets/sec, and cumulative totals |
+| **WAN Filter Stats** | Blocked packet/byte counters and drop rate from bridge filter |
 | **Tailscale Link Mode** | Shows whether the Tailscale connection is direct peer-to-peer or relayed through DERP |
 | **Bridge Controls** | Start, Stop, Restart, Setup, Connect, and Debug buttons |
+| **Packet Capture** | Start/stop tcpdump captures with configurable duration and recording indicator |
+| **File Manager** | Browse, download, and delete capture files and log files |
 | **Aircraft Profiles** | Save multiple aircraft with names and optional SSH passwords |
 | **Profile Switching** | Switch between aircraft from dropdown selector |
 | **Live Logs** | Real-time streaming of l2bridge, tinc, and kcptun logs |
@@ -399,6 +416,66 @@ l2bridge webui-remove
 ```
 
 This removes web files and uhttpd configuration but preserves aircraft profiles.
+
+## Bridge Traffic Filter
+
+The L2 bridge includes an nftables-based traffic filter that ensures only LAN traffic crosses the satellite link. Internet-bound traffic routes locally on each side, preserving bandwidth.
+
+### What Gets Filtered
+
+| Traffic Type | Action | Reason |
+|-------------|--------|--------|
+| RFC1918 destinations (10.x, 172.16-31.x, 192.168.x) | Allow | LAN device communication |
+| Link-local (169.254.x) | Allow | Device auto-configuration |
+| Multicast (224.0.0.0/4) | Allow | ARP, DHCP, mDNS, SSDP |
+| Broadcast (255.255.255.255) | Allow | DHCP, device discovery |
+| IPv6 link-local + multicast | Allow | Local IPv6 operations |
+| Public IP destinations | **Drop** | Internet traffic uses local gateway |
+
+The filter applies automatically when the bridge starts and is removed when it stops. Drop counters are visible in the web UI under "WAN Filter" in Network Statistics.
+
+### Local-Only Traffic
+
+Traffic between devices on the same side of the bridge (e.g., aircraft router talking to a locally-connected flight controller) stays local and never crosses the bridge. The Linux bridge's MAC learning ensures frames are only forwarded to the port where the destination was learned.
+
+## Packet Capture
+
+Built-in packet capture for analyzing bridge traffic using Wireshark.
+
+### Command Line
+
+```bash
+# Capture for 60 seconds (default)
+l2bridge capture
+
+# Capture for 30 seconds
+l2bridge capture 30
+
+# Stop an active capture early
+l2bridge capture stop
+
+# Check capture status
+l2bridge capture status
+```
+
+Captures are saved to `/tmp/l2bridge-capture.pcap` in standard pcap format. Transfer to your workstation for analysis:
+
+```bash
+scp root@<router-ip>:/tmp/l2bridge-capture.pcap .
+wireshark l2bridge-capture.pcap
+```
+
+### Web UI
+
+The web UI provides capture controls and a file manager:
+
+1. Set capture duration (5-3600 seconds)
+2. Click **Start Capture** — a recording indicator shows elapsed time
+3. Click **Stop** to end early, or wait for the duration to expire
+4. Download the `.pcap` file from the **Files** panel
+5. Open in Wireshark for analysis
+
+The file manager also provides download access to setup and watchdog log files.
 
 ## Updating
 
@@ -530,6 +607,7 @@ Limited by Starlink uplink (~20-40 Mbps typical). Bridge adds minimal overhead w
 - **Tinc**: Compression disabled for CPU efficiency
 - **SSH**: Dropbear ed25519 keys for router-to-router auth
 - **Firewall**: Blocks WireGuard traffic from crossing bridge (prevents loops)
+- **Bridge Filter**: nftables rules restrict bridge to RFC1918/link-local traffic only (no WAN leakage)
 
 ## File Locations
 
@@ -550,7 +628,8 @@ Limited by Starlink uplink (~20-40 Mbps typical). Bridge adds minimal overhead w
 /tmp/l2bridge-watchdog.log     # Watchdog log
 
 # Web UI (after webui-install)
-/www/rvr/index.html            # Web interface
+/www/rvr/index.html            # Web interface (React SPA)
+/www/rvr/assets/               # Built JS/CSS bundles
 /www/rvr/cgi-bin/              # API endpoints
 ```
 

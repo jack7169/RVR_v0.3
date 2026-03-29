@@ -484,6 +484,79 @@ main() {
             run_l2bridge_command "logs" "50"
             ;;
 
+        # Capture commands
+        capture_start)
+            local duration=$(parse_json "duration" "$post_data")
+            duration="${duration:-60}"
+            run_l2bridge_command "capture" "$duration"
+            ;;
+        capture_stop)
+            run_l2bridge_command "capture" "stop"
+            ;;
+
+        # File management
+        list_files)
+            echo "Content-Type: application/json"
+            echo ""
+            printf '{"files":['
+            first=1
+            for f in /tmp/l2bridge-capture*.pcap /tmp/l2bridge-setup.log /tmp/l2bridge-watchdog.log; do
+                [ -f "$f" ] || continue
+                fname=$(basename "$f")
+                fsize=$(wc -c < "$f" 2>/dev/null || echo 0)
+                fdate=$(date -r "$f" -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
+                ftype="log"
+                echo "$fname" | grep -q '\.pcap$' && ftype="capture"
+                [ $first -eq 0 ] && printf ','
+                printf '{"name":"%s","path":"%s","size":%s,"modified":"%s","type":"%s"}' \
+                    "$fname" "$f" "$fsize" "$fdate" "$ftype"
+                first=0
+            done
+            printf ']}'
+            exit 0
+            ;;
+        download)
+            local filename=$(parse_json "file" "$post_data")
+            [ -z "$filename" ] && filename=$(echo "$QUERY_STRING" | sed -n 's/.*file=\([^&]*\).*/\1/p')
+            # Security: only allow specific files from /tmp/
+            case "$filename" in
+                l2bridge-capture*.pcap|l2bridge-setup.log|l2bridge-watchdog.log)
+                    local filepath="/tmp/$filename"
+                    if [ -f "$filepath" ]; then
+                        echo "Content-Type: application/octet-stream"
+                        echo "Content-Disposition: attachment; filename=\"$filename\""
+                        echo "Content-Length: $(wc -c < "$filepath")"
+                        echo ""
+                        cat "$filepath"
+                        exit 0
+                    else
+                        json_error "File not found"
+                    fi
+                    ;;
+                *)
+                    json_error "Access denied: invalid filename"
+                    ;;
+            esac
+            ;;
+        delete_file)
+            local filename=$(parse_json "file" "$post_data")
+            # Only allow deleting capture files
+            case "$filename" in
+                l2bridge-capture*.pcap)
+                    local filepath="/tmp/$filename"
+                    if [ -f "$filepath" ]; then
+                        rm -f "$filepath"
+                        json_response '{"success": true, "message": "File deleted"}'
+                    else
+                        json_error "File not found"
+                    fi
+                    ;;
+                *)
+                    json_error "Only capture files can be deleted"
+                    ;;
+            esac
+            ;;
+
         # Aircraft profile management
         list_aircraft)
             list_aircraft

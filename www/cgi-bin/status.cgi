@@ -27,6 +27,12 @@ if tailscale status >/dev/null 2>&1; then
     GCS_TS_STATUS="connected"
 fi
 
+# Check internet connectivity (fast, non-blocking)
+INTERNET_STATUS="disconnected"
+if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+    INTERNET_STATUS="connected"
+fi
+
 # Check local services
 KCPTUN_STATUS="stopped"
 pgrep -f kcptun-server >/dev/null 2>&1 && KCPTUN_STATUS="running"
@@ -233,6 +239,35 @@ fi
 # Get current timestamp in milliseconds for rate calculation
 STATS_TIMESTAMP=$(date +%s%3N 2>/dev/null || echo $(($(date +%s) * 1000)))
 
+# Bridge filter stats (nftables counters)
+FILTER_ACTIVE="false"
+FILTER_DROPPED_PKTS=0
+FILTER_DROPPED_BYTES=0
+if nft list table bridge l2bridge_filter >/dev/null 2>&1; then
+    FILTER_ACTIVE="true"
+    FILTER_STATS=$(nft list chain bridge l2bridge_filter forward 2>/dev/null)
+    # Sum counters from both drop rules
+    FILTER_DROPPED_PKTS=$(echo "$FILTER_STATS" | grep "counter" | grep "drop" | sed 's/.*packets \([0-9]*\).*/\1/' | awk '{s+=$1} END {print s+0}')
+    FILTER_DROPPED_BYTES=$(echo "$FILTER_STATS" | grep "counter" | grep "drop" | sed 's/.*bytes \([0-9]*\).*/\1/' | awk '{s+=$1} END {print s+0}')
+fi
+
+# Capture status
+CAPTURE_ACTIVE="false"
+CAPTURE_ELAPSED=0
+CAPTURE_DURATION=0
+CAPTURE_FILE_SIZE=0
+CAPTURE_PID_FILE="/tmp/l2bridge-capture.pid"
+CAPTURE_FILE="/tmp/l2bridge-capture.pcap"
+if [ -f "$CAPTURE_PID_FILE" ]; then
+    CAPTURE_PID=$(cat "$CAPTURE_PID_FILE")
+    if kill -0 "$CAPTURE_PID" 2>/dev/null; then
+        CAPTURE_ACTIVE="true"
+        CAPTURE_ELAPSED=$(ps -o etimes= -p "$CAPTURE_PID" 2>/dev/null | tr -d ' ')
+        CAPTURE_ELAPSED="${CAPTURE_ELAPSED:-0}"
+    fi
+fi
+[ -f "$CAPTURE_FILE" ] && CAPTURE_FILE_SIZE=$(wc -c < "$CAPTURE_FILE" 2>/dev/null || echo 0)
+
 # Version tracking
 VERSION_CURRENT=$(cat /etc/l2bridge/version 2>/dev/null || echo "unknown")
 VERSION_LATEST=""
@@ -342,6 +377,19 @@ cat << EOF
       "rx_packets": $TS_RX_PACKETS,
       "tx_packets": $TS_TX_PACKETS
     }
+  },
+  "internet": {
+    "status": "$INTERNET_STATUS"
+  },
+  "bridge_filter": {
+    "active": $FILTER_ACTIVE,
+    "dropped_packets": $FILTER_DROPPED_PKTS,
+    "dropped_bytes": $FILTER_DROPPED_BYTES
+  },
+  "capture": {
+    "active": $CAPTURE_ACTIVE,
+    "elapsed": ${CAPTURE_ELAPSED:-0},
+    "file_size": $CAPTURE_FILE_SIZE
   },
   "version": {
     "current": "$VERSION_CURRENT",

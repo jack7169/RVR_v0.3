@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Kuruka RVR L2 Bridge Tool v2.2
+# Kuruka RVR L2 Bridge Tool v3.0
 # Manages L2 bridge between GCS and Aircraft over Tailscale
 # Supports full 1500 MTU for device compatibility (cameras, etc.)
 # Includes robust auto-reconnection and health monitoring
@@ -586,6 +586,7 @@ stop_local_services() {
     log_info "Stopping local services..."
     /etc/init.d/tinc-l2bridge stop 2>/dev/null || true
     /etc/init.d/kcptun-server stop 2>/dev/null || true
+    nft delete table bridge l2bridge_filter 2>/dev/null || true
     ip link set l2bridge nomaster 2>/dev/null || true
     ip link del l2bridge 2>/dev/null || true
     iptables -D OUTPUT -o br-lan -p udp --dport 41641 -j DROP 2>/dev/null || true
@@ -602,6 +603,7 @@ stop_aircraft_services() {
     check_aircraft_reachable "$AIRCRAFT_IP" && ssh_key_works "$AIRCRAFT_IP" && ssh_aircraft "$AIRCRAFT_IP" '
         /etc/init.d/tinc-l2bridge stop 2>/dev/null || true
         /etc/init.d/kcptun-client stop 2>/dev/null || true
+        nft delete table bridge l2bridge_filter 2>/dev/null || true
         ip link set l2bridge nomaster 2>/dev/null || true
         ip link del l2bridge 2>/dev/null || true
         iptables -D OUTPUT -o br-lan -p udp --dport 41641 -j DROP 2>/dev/null || true
@@ -858,11 +860,31 @@ iptables -I FORWARD -i \$INTERFACE -p udp --sport 41641 -j DROP
 iptables -I FORWARD -o \$INTERFACE -p udp --sport 41641 -j DROP
 ip link set $gcs_bridge type bridge stp_state 1
 ip link set \$INTERFACE master $gcs_bridge
+nft -f - <<'NFTEOF'
+table bridge l2bridge_filter {
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        iifname != "l2bridge" oifname != "l2bridge" accept
+        ether type arp accept
+        ether type ip ip daddr 10.0.0.0/8 accept
+        ether type ip ip daddr 172.16.0.0/12 accept
+        ether type ip ip daddr 192.168.0.0/16 accept
+        ether type ip ip daddr 169.254.0.0/16 accept
+        ether type ip ip daddr 224.0.0.0/4 accept
+        ether type ip ip daddr 255.255.255.255 accept
+        ether type ip6 ip6 daddr fe80::/10 accept
+        ether type ip6 ip6 daddr ff00::/8 accept
+        iifname "l2bridge" counter drop
+        oifname "l2bridge" counter drop
+    }
+}
+NFTEOF
 EOF
     chmod +x /etc/tinc/$NETWORK_NAME/tinc-up
 
     cat > /etc/tinc/$NETWORK_NAME/tinc-down << EOF
 #!/bin/sh
+nft delete table bridge l2bridge_filter 2>/dev/null || true
 ip link set \$INTERFACE nomaster 2>/dev/null || true
 iptables -D OUTPUT -o $gcs_bridge -p udp --dport 41641 -j DROP 2>/dev/null || true
 iptables -D OUTPUT -o $gcs_bridge -p udp --sport 41641 -j DROP 2>/dev/null || true
@@ -978,11 +1000,31 @@ iptables -I FORWARD -i \\\$INTERFACE -p udp --sport 41641 -j DROP
 iptables -I FORWARD -o \\\$INTERFACE -p udp --sport 41641 -j DROP
 ip link set $aircraft_bridge type bridge stp_state 1
 ip link set \\\$INTERFACE master $aircraft_bridge
+nft -f - <<'NFTEOF'
+table bridge l2bridge_filter {
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        iifname != "l2bridge" oifname != "l2bridge" accept
+        ether type arp accept
+        ether type ip ip daddr 10.0.0.0/8 accept
+        ether type ip ip daddr 172.16.0.0/12 accept
+        ether type ip ip daddr 192.168.0.0/16 accept
+        ether type ip ip daddr 169.254.0.0/16 accept
+        ether type ip ip daddr 224.0.0.0/4 accept
+        ether type ip ip daddr 255.255.255.255 accept
+        ether type ip6 ip6 daddr fe80::/10 accept
+        ether type ip6 ip6 daddr ff00::/8 accept
+        iifname "l2bridge" counter drop
+        oifname "l2bridge" counter drop
+    }
+}
+NFTEOF
 TINCUP
 chmod +x /etc/tinc/$NETWORK_NAME/tinc-up"
 
     ssh_aircraft "$AIRCRAFT_IP" "cat > /etc/tinc/$NETWORK_NAME/tinc-down << TINCDOWN
 #!/bin/sh
+nft delete table bridge l2bridge_filter 2>/dev/null || true
 ip link set \\\$INTERFACE nomaster 2>/dev/null || true
 iptables -D OUTPUT -o $aircraft_bridge -p udp --dport 41641 -j DROP 2>/dev/null || true
 iptables -D OUTPUT -o $aircraft_bridge -p udp --sport 41641 -j DROP 2>/dev/null || true
@@ -1402,6 +1444,11 @@ cmd_webui_install() {
     if [ -d "$src_www" ]; then
         log_info "Installing from local source: $src_www"
         cp "$src_www/index.html" "$WEBUI_ROOT/"
+        # Copy built assets (React app)
+        if [ -d "$src_www/assets" ]; then
+            mkdir -p "$WEBUI_ROOT/assets"
+            cp -r "$src_www/assets/"* "$WEBUI_ROOT/assets/"
+        fi
         cp "$src_www/cgi-bin/"*.cgi "$WEBUI_ROOT/cgi-bin/"
     else
         log_error "Web UI source files not found at $src_www"
@@ -1716,6 +1763,106 @@ HOSTKEY"
 }
 
 #############################################
+# CAPTURE COMMAND
+#############################################
+CAPTURE_PID_FILE="/tmp/l2bridge-capture.pid"
+CAPTURE_DEFAULT_FILE="/tmp/l2bridge-capture.pcap"
+CAPTURE_DEFAULT_DURATION=60
+
+cmd_capture() {
+    local subcmd="${1:-start}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        stop)
+            if [ -f "$CAPTURE_PID_FILE" ]; then
+                local pid=$(cat "$CAPTURE_PID_FILE")
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill "$pid" 2>/dev/null
+                    sleep 1
+                    kill -9 "$pid" 2>/dev/null || true
+                    echo "Capture stopped (PID $pid)"
+                else
+                    echo "Capture process not running"
+                fi
+                rm -f "$CAPTURE_PID_FILE"
+            else
+                echo "No active capture"
+            fi
+            # Report file info
+            local capfile="$CAPTURE_DEFAULT_FILE"
+            if [ -f "$capfile" ]; then
+                local size=$(wc -c < "$capfile")
+                echo "Capture file: $capfile ($size bytes)"
+            fi
+            ;;
+        status)
+            if [ -f "$CAPTURE_PID_FILE" ] && kill -0 "$(cat "$CAPTURE_PID_FILE")" 2>/dev/null; then
+                local pid=$(cat "$CAPTURE_PID_FILE")
+                local elapsed=""
+                if [ -f /proc/$pid ]; then
+                    elapsed=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+                fi
+                echo "Capture running (PID $pid${elapsed:+, ${elapsed}s elapsed})"
+            else
+                rm -f "$CAPTURE_PID_FILE"
+                echo "No active capture"
+            fi
+            local capfile="$CAPTURE_DEFAULT_FILE"
+            if [ -f "$capfile" ]; then
+                local size=$(wc -c < "$capfile")
+                echo "Capture file: $capfile ($size bytes)"
+            else
+                echo "No capture file"
+            fi
+            ;;
+        start|[0-9]*)
+            # Allow "l2bridge capture 30" as shorthand
+            local duration="$CAPTURE_DEFAULT_DURATION"
+            local outfile="$CAPTURE_DEFAULT_FILE"
+            if echo "$subcmd" | grep -qE '^[0-9]+$'; then
+                duration="$subcmd"
+            elif [ -n "$1" ] && echo "$1" | grep -qE '^[0-9]+$'; then
+                duration="$1"; shift 2>/dev/null || true
+            fi
+            [ -n "$1" ] && outfile="$1"
+
+            # Check for existing capture
+            if [ -f "$CAPTURE_PID_FILE" ] && kill -0 "$(cat "$CAPTURE_PID_FILE")" 2>/dev/null; then
+                echo "Capture already running (PID $(cat "$CAPTURE_PID_FILE")). Stop it first."
+                return 1
+            fi
+
+            # Check tcpdump available
+            if ! command -v tcpdump >/dev/null 2>&1; then
+                echo "Error: tcpdump not installed. Run: opkg install tcpdump"
+                return 1
+            fi
+
+            # Check l2bridge interface exists
+            if ! ip link show l2bridge >/dev/null 2>&1; then
+                echo "Error: l2bridge interface not found. Is the bridge running?"
+                return 1
+            fi
+
+            echo "Starting capture on l2bridge for ${duration}s -> $outfile"
+            timeout "$duration" tcpdump -i l2bridge -s 0 -w "$outfile" >/dev/null 2>&1 &
+            local pid=$!
+            echo "$pid" > "$CAPTURE_PID_FILE"
+            echo "Capture started (PID $pid, duration ${duration}s)"
+            echo "Stop early with: l2bridge capture stop"
+            echo "Download file: $outfile"
+            ;;
+        *)
+            echo "Usage: l2bridge capture [start|stop|status] [duration] [file]"
+            echo "  l2bridge capture 30          - capture for 30 seconds"
+            echo "  l2bridge capture stop         - stop active capture"
+            echo "  l2bridge capture status       - check capture status"
+            ;;
+    esac
+}
+
+#############################################
 # MAIN
 #############################################
 CMD="$1"; shift 2>/dev/null || true
@@ -1736,6 +1883,7 @@ case "$CMD" in
     watchdog-remove) cmd_watchdog_remove ;;
     webui-install) cmd_webui_install ;;
     webui-remove) cmd_webui_remove ;;
+    capture|cap) cmd_capture "$@" ;;
     update) cmd_update ;;
     uninstall|remove) cmd_uninstall "$@" ;;
     help|-h|--help) print_usage ;;
