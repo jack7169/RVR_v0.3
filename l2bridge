@@ -17,6 +17,8 @@ SETUP_LOG="/tmp/l2bridge-setup.log"
 
 # Initialize log file for setup commands
 init_setup_log() {
+    # Truncate if over 1MB to prevent /tmp (tmpfs/RAM) exhaustion
+    [ -f "$SETUP_LOG" ] && [ "$(wc -c < "$SETUP_LOG" 2>/dev/null || echo 0)" -gt 1048576 ] && : > "$SETUP_LOG"
     exec > >(tee -a "$SETUP_LOG") 2>&1
     echo ""
     echo "========================================="
@@ -45,6 +47,14 @@ NETWORK_NAME="l2bridge"
 BRIDGE_MTU="1500"
 KCP_SEGMENT_MTU="1200"
 KCP_STREAMBUF="4194304"
+
+# KCP ARQ tuning — optimized for Starlink drop pattern (100-500ms outage, then full recovery)
+# Higher resend threshold avoids flooding retransmits into a dead link during brief dropouts.
+# Starlink recovers to full throughput after drops, so we wait it out rather than retransmit aggressively.
+KCP_NODELAY=1          # 1=nodelay mode (no artificial delays on ACKs)
+KCP_INTERVAL=20        # 20ms internal update interval (relaxed from 10ms — less CPU, still responsive)
+KCP_RESEND=4           # Retransmit after 4 missed ACKs (~80ms) — rides out brief Starlink hiccups
+KCP_NC=1               # 1=no congestion control (we control the link, don't throttle)
 
 # Timing configuration
 TAILSCALE_WAIT_TIMEOUT=120
@@ -780,6 +790,9 @@ echo $$ > "$LOCK"
 trap "rm -f $LOCK" EXIT
 
 # Always run health check (updates /tmp/l2bridge.health and repairs if needed)
+# Hard cap: truncate if over 512KB to prevent RAM exhaustion (/tmp is tmpfs)
+[ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 524288 ] && tail -50 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+
 /usr/bin/l2bridge monitor >> "$LOG" 2>&1
 
 [ -f "$LOG" ] && tail -100 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
@@ -796,7 +809,7 @@ WATCHDOG
         cat >> /etc/rc.local << 'RCLOCAL'
 
 # L2Bridge auto-start
-( sleep 30; /usr/bin/l2bridge monitor ) &
+( sleep 60; timeout 30 /usr/bin/l2bridge monitor ) &
 exit 0
 RCLOCAL
     fi
@@ -972,10 +985,10 @@ EOF
     "key": "$KCPTUN_KEY",
     "crypt": "none",
     "nocomp": true,
-    "nodelay": 1,
-    "interval": 10,
-    "resend": 2,
-    "nc": 1,
+    "nodelay": $KCP_NODELAY,
+    "interval": $KCP_INTERVAL,
+    "resend": $KCP_RESEND,
+    "nc": $KCP_NC,
     "mtu": $KCP_SEGMENT_MTU,
     "sndwnd": 1024,
     "rcvwnd": 1024,
@@ -1002,7 +1015,7 @@ start_service() {
         sed -i "s|\"listen\": \"[^\"]*:|\"listen\": \"$ts_ip:|g" /etc/kcptun/server.json
     procd_open_instance
     procd_set_param command /usr/bin/kcptun-server -c /etc/kcptun/server.json
-    procd_set_param respawn 10 5 0
+    procd_set_param respawn 3600 5 5
     procd_set_param stderr 1
     procd_set_param stdout 1
     procd_close_instance
@@ -1024,7 +1037,7 @@ start_service() {
     done
     procd_open_instance
     procd_set_param command /usr/sbin/tincd -n l2bridge -D
-    procd_set_param respawn 10 5 0
+    procd_set_param respawn 3600 5 5
     procd_set_param stderr 1
     procd_set_param stdout 1
     procd_close_instance
@@ -1112,10 +1125,10 @@ chmod +x /etc/tinc/$NETWORK_NAME/tinc-down"
     \"key\": \"$KCPTUN_KEY\",
     \"crypt\": \"none\",
     \"nocomp\": true,
-    \"nodelay\": 1,
-    \"interval\": 10,
-    \"resend\": 2,
-    \"nc\": 1,
+    \"nodelay\": $KCP_NODELAY,
+    \"interval\": $KCP_INTERVAL,
+    \"resend\": $KCP_RESEND,
+    \"nc\": $KCP_NC,
     \"mtu\": $KCP_SEGMENT_MTU,
     \"sndwnd\": 1024,
     \"rcvwnd\": 1024,
@@ -1140,7 +1153,7 @@ start_service() {
     done
     procd_open_instance
     procd_set_param command /usr/bin/kcptun-client -c /etc/kcptun/client.json
-    procd_set_param respawn 10 5 0
+    procd_set_param respawn 3600 5 5
     procd_set_param stderr 1
     procd_set_param stdout 1
     procd_close_instance
@@ -1162,7 +1175,7 @@ start_service() {
     done
     procd_open_instance
     procd_set_param command /usr/sbin/tincd -n l2bridge -D
-    procd_set_param respawn 10 5 0
+    procd_set_param respawn 3600 5 5
     procd_set_param stderr 1
     procd_set_param stdout 1
     procd_close_instance
