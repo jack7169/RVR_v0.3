@@ -46,7 +46,10 @@ NETWORK_NAME="l2bridge"
 # MTU Configuration
 BRIDGE_MTU="1500"
 KCP_SEGMENT_MTU="1200"
-KCP_STREAMBUF="4194304"
+KCP_SOCKBUF="8388608"
+KCP_SMUXBUF="8388608"
+KCP_SMUXVER=2
+KCP_STREAM_BUF="2097152"
 
 # KCP ARQ tuning — optimized for Starlink drop pattern (100-500ms outage, then full recovery)
 # Higher resend threshold avoids flooding retransmits into a dead link during brief dropouts.
@@ -993,8 +996,10 @@ EOF
     "sndwnd": 1024,
     "rcvwnd": 1024,
     "dscp": 46,
-    "sockbuf": $KCP_STREAMBUF,
-    "smuxbuf": $KCP_STREAMBUF
+    "sockbuf": $KCP_SOCKBUF,
+    "smuxbuf": $KCP_SMUXBUF,
+    "smuxver": $KCP_SMUXVER,
+    "streambuf": $KCP_STREAM_BUF
 }
 EOF
 
@@ -1133,8 +1138,10 @@ chmod +x /etc/tinc/$NETWORK_NAME/tinc-down"
     \"sndwnd\": 1024,
     \"rcvwnd\": 1024,
     \"dscp\": 46,
-    \"sockbuf\": $KCP_STREAMBUF,
-    \"smuxbuf\": $KCP_STREAMBUF,
+    \"sockbuf\": $KCP_SOCKBUF,
+    \"smuxbuf\": $KCP_SMUXBUF,
+    \"smuxver\": $KCP_SMUXVER,
+    \"streambuf\": $KCP_STREAM_BUF,
     \"autoexpire\": 0
 }
 EOF"
